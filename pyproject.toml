@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "silentfail"
+version = "0.1.0"
+description = "Assertions for AI-generated media. The bugs don't throw; silentfail makes them throw."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Roger Simões" }]
+keywords = ["testing", "assertions", "eval", "video", "audio", "tts", "generative-ai", "qa"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Software Development :: Testing",
+]
+# ffmpeg is a subprocess, not a dependency. The deterministic tier needs nothing.
+dependencies = []
+
+[project.optional-dependencies]
+vision = ["anthropic>=0.40"]
+
+[project.scripts]
+silentfail = "silentfail.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["silentfail*"]
