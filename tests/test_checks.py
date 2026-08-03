@@ -84,7 +84,7 @@ def test_pace_flags_a_drag():
 def test_pace_reads_a_vtt_and_ignores_its_cues():
     vtt = FIXTURES / "script.vtt"
     vtt.write_text(
-        "WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\n<v Karl>two words\n\n"
+        "WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\n<v Alex>two words\n\n"
         "2\n00:00:02.000 --> 00:00:04.000\nthree more words\n"
     )
     # Cue numbers, timestamps, WEBVTT and <v> must not be counted as narration.
@@ -130,26 +130,26 @@ def test_dead_air_accepts_continuous_audio():
 
 # --- speaker: the wrong-face-for-a-whole-module defect ----------------------
 
-ROSTER = ["Karl", "Benjawan", "Nika"]
+ROSTER = ["Alex", "Jordan", "Sam"]
 
 
 def test_speaker_flags_the_wrong_presenter():
-    message = raises(assert_speaker, "Hi, I'm Benjawan, your instructor.", "Karl", ROSTER)
-    assert "Benjawan" in message and "Karl is assigned" in message, message
+    message = raises(assert_speaker, "Hi, I'm Jordan, your instructor.", "Alex", ROSTER)
+    assert "Jordan" in message and "Alex is assigned" in message, message
 
 
 def test_speaker_ignores_characters_who_are_not_on_the_roster():
     # The whole point of the roster: a scenario character must not trip this.
-    assert_speaker("I'm Amara, a senior nurse, and I use AI daily.", "Karl", ROSTER)
+    assert_speaker("I'm Rosa, a senior nurse, and I use AI daily.", "Alex", ROSTER)
 
 
 def test_speaker_accepts_the_right_presenter():
-    assert_speaker("My name is Karl and I'll be walking you through this.", "Karl", ROSTER)
+    assert_speaker("My name is Alex and I'll be walking you through this.", "Alex", ROSTER)
 
 
 def test_speaker_requires_a_roster():
     try:
-        assert_speaker("I'm Benjawan.", "Karl", [])
+        assert_speaker("I'm Jordan.", "Alex", [])
     except ValueError as exc:
         assert "roster" in str(exc)
     else:

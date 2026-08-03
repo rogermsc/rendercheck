@@ -13,7 +13,7 @@ from ._core import SilentFail
 _CUE_LINE = re.compile(r"^\s*(\d+|WEBVTT.*|NOTE.*)?\s*$|-->")
 _TAG = re.compile(r"<[^>]+>")
 
-# "I'm Karl", "I am Karl", "My name is Karl" -- how a script states, in words,
+# "I'm Alex", "I am Alex", "My name is Alex" -- how a script states, in words,
 # who is supposed to be on screen.
 _SELF_INTRO = re.compile(r"\b(?:I'm|I am|My name is)\s+([A-Z][a-z]+)")
 
@@ -45,13 +45,13 @@ def read_script(script) -> str:
 def assert_speaker(script, expected, known_names) -> None:
     """The script's self-introduction against the presenter actually assigned.
 
-    The incident: a script said "I'm Benjawan" while the registry assigned Karl.
+    The incident: a script said "I'm Jordan" while the registry assigned Alex.
     An entire module rendered with the wrong face and the wrong gender.
     **Every other gate passed** -- the audio was clean, the timing was right,
     the avatar was valid. Only the identity was wrong, and nothing was looking.
 
     `known_names` is the roster of real presenters, and it is the whole trick:
-    without it, a character in a scenario saying "I'm Amara, a nurse" trips the
+    without it, a character in a scenario saying "I'm Rosa, a nurse" trips the
     check on every script that tells a story. Only a name belonging to someone
     who could actually have been cast counts as a claim about the presenter.
     It is required for that reason -- there is no safe default.

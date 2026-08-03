@@ -82,21 +82,21 @@ assert_no_dead_air("lesson-1.2.mp4", max_silence=3.0)
 mid-file is a dropped segment, not a pause (2 found in total): lesson-1.2.mp4
 ```
 
-**The wrong person on screen.** A script said "I'm Benjawan" while the registry
-assigned Karl. An entire module rendered with the wrong face and the wrong
+**The wrong person on screen.** A script said "I'm Jordan" while the registry
+assigned Alex. An entire module rendered with the wrong face and the wrong
 gender. **Every other gate passed.**
 
 ```python
-assert_speaker(script, expected="Karl", known_names=["Karl", "Benjawan", "Nika"])
+assert_speaker(script, expected="Alex", known_names=["Alex", "Jordan", "Sam"])
 ```
 ```
-the script introduces the presenter as "Benjawan" but Karl is assigned -- the
+the script introduces the presenter as "Jordan" but Alex is assigned -- the
 rendered avatar would introduce itself with someone else's name. Fix whichever
 is wrong: the assigned presenter, or the name in the script
 ```
 
 The `known_names` roster is required, and it's the whole trick: without it, a
-character in a scenario saying *"I'm Amara, a nurse"* trips the check on every
+character in a scenario saying *"I'm Rosa, a nurse"* trips the check on every
 script that tells a story. Only a name belonging to someone who could actually
 have been cast counts as a claim about the presenter.
 
