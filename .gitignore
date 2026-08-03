@@ -7,3 +7,7 @@ dist/
 venv/
 .pytest_cache/
 .env
+.coverage
+coverage.xml
+htmlcov/
+uv.lock
