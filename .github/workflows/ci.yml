@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,vision]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - name: Build and validate the package
+        run: |
+          pipx run build
+          pipx run twine check --strict dist/*
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      # The test fixtures are generated with ffmpeg rather than committed as
+      # binaries, so the suite cannot run without it. This is the one step that
+      # does not carry over from a pure-Python project.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -e ".[dev,vision]"
+      - run: pytest -q --cov --cov-fail-under=80
+      - name: Smoke-test the CLI end to end
+        run: |
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=4" \
+            -af loudnorm=I=-16:TP=-1.5:LRA=11 /tmp/clean.wav
+          silentfail check /tmp/clean.wav --expect-seconds 4
+          # A video with no audio must exit non-zero -- the regression that
+          # named this library. `!` so a correct failure passes the step.
+          ffmpeg -loglevel error -f lavfi -i "color=c=blue:s=320x240" -t 3 /tmp/noaudio.mp4
+          ! silentfail check /tmp/noaudio.mp4

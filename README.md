@@ -1,66 +1,102 @@
 # silentfail
 
+[![CI](https://github.com/rogermsc/silentfail/actions/workflows/ci.yml/badge.svg)](https://github.com/rogermsc/silentfail/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.14-blue)](https://github.com/rogermsc/silentfail)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **The worst bugs in generated media don't throw.**
 
-Your test suite catches the exception that never happens. It does not catch the
-narration that reads at 300 words per minute, the voice track sitting 18 dB
-below the avatar it's cut against, the segment that rendered at 42% length and
-got cached as a success, or the wrong presenter introducing themselves for a
-whole module.
+If you generate speech or video with a model — TTS, voice agents, podcasts,
+avatars, AI video — your tests catch the exception that never happens. They do
+not catch the narration that reads at 300 words per minute, the voice track
+sitting 18 dB below the footage it's cut against, the clip that rendered at 42%
+length and got cached as a success, or the file whose audio track is missing
+entirely.
 
-Those are all real incidents. Every one of them shipped. The detector, in every
-case, was a human watching the finished output — the most expensive one
-available.
+The 2026 state of the art for catching these is *a person listening to the
+output*. That works, and it costs more than everything else in your pipeline
+combined.
 
 `silentfail` makes them throw.
 
 ```python
 from silentfail import assert_pace, assert_loudness, looks_ok
 
-assert_pace("lesson-1.2.mp4", "lesson-1.2.vtt")
-assert_loudness("lesson-1.2.mp4")
+assert_pace("episode-12.mp3", "episode-12.vtt")
+assert_loudness("episode-12.mp3")
 looks_ok("slide-14.png", ["the title fits on one line"])
 ```
 
-They're plain assert functions. No framework, no runner, no config file, no
-service. They raise `AssertionError`, so they already work in pytest, in CI, or
-in a five-line script.
+Plain assert functions. No framework, no runner, no config file, no service.
+They raise `AssertionError`, so they already work in pytest, in CI, or in a
+five-line script. The five deterministic checks have **no dependencies and make
+no network calls** — if you have `ffmpeg`, you're ready.
+
+---
+
+## Quickstart
+
+```bash
+pip install git+https://github.com/rogermsc/silentfail   # PyPI release pending
+silentfail check episode-12.mp3 --script episode-12.vtt
+```
+
+```
+  FAIL  pace      narration pace 300 WPM exceeds 245 (300 words in 60.0s) -- …
+  PASS  loudness  -16.0 LUFS
+  FAIL  dead air  6.2s of silence starting at 0:41 exceeds the 3s limit -- …
+
+  1 passed, 2 failed, 0 skipped
+```
+
+Exit code is 1 if anything failed, so it drops straight into CI. `--json` gives
+you the same report for pipelines in any language.
+
+In pytest they're just asserts — no plugin, no fixtures:
+
+```python
+@pytest.mark.parametrize("episode", EPISODES)
+def test_episode_is_shippable(episode):
+    assert_pace(episode.audio, episode.vtt)
+    assert_loudness(episode.audio)
+    assert_no_dead_air(episode.audio)
+```
 
 ---
 
 ## Six checks, six incidents
 
-Each default below is a threshold set by a defect that actually shipped, not a
-number chosen for symmetry. All output is verbatim.
+Each default is a threshold set by a defect that actually shipped, not a number
+chosen for symmetry. All output below is verbatim. Every threshold is an
+argument — see the [reference](docs/README.md) for tuning.
 
 **Narration too fast.** A voice picked to match a presenter's *face* narrated
-English at ~280 WPM. The audio was valid, correctly timed, perfectly in sync.
-It just sounded like a machine gun.
+English at ~280 WPM. The audio was valid, correctly timed, perfectly in sync. It
+just sounded like a machine gun.
 
 ```python
-assert_pace("lesson-1.2.mp4", "lesson-1.2.vtt", max_wpm=245)
+assert_pace("episode-12.mp3", "episode-12.vtt", max_wpm=245)
 ```
 ```
 narration pace 300 WPM exceeds 245 (300 words in 60.0s) -- this reads as
-machine-gun delivery and listeners cannot follow it: lesson-1.2.mp4
+machine-gun delivery and listeners cannot follow it: episode-12.mp3
 ```
 
 **Levels that don't match.** Synthesised narration landed at −34 LUFS and was
-concatenated with avatar footage at −13. Same file, same lesson, a 20 dB step
-in the middle. Viewers rode the volume knob for 45 minutes.
+concatenated with footage at −13. Same file, a 20 dB step in the middle. Nobody
+noticed until viewers spent 45 minutes riding the volume knob.
 
 ```python
-assert_loudness("lesson-1.2.mp4", target_lufs=-16, tol=2.0)
+assert_loudness("episode-12.mp3", target_lufs=-16, tol=2.0)
 ```
 ```
 -34.0 LUFS is 18.0 dB quieter than the -16 target -- it will sound inaudible
-next to correctly-levelled audio cut alongside it: lesson-1.2.mp4
+next to correctly-levelled audio cut alongside it: episode-12.mp3
 ```
 
-**Truncated renders cached as successes.** Encode failures produced segments a
-fraction of their intended length, which the pipeline then cached as
-*succeeded*. Retries only re-ran segments that had **errored** — and these
-hadn't.
+**Truncated renders cached as successes.** Encode failures produced clips a
+fraction of their intended length, which the pipeline cached as *succeeded*.
+Retries only re-ran the ones that had **errored** — and these hadn't.
 
 ```python
 assert_duration("segment-07.mp4", expected_seconds=24.0)
@@ -71,20 +107,20 @@ silent encode failure, not a short take; re-render rather than retry
 ```
 
 **Holes in the middle.** Compositing failed transiently *and silently*, leaving
-dead stretches mid-lesson. The file was the right length and the right average
-loudness. The hole only existed in the middle.
+dead stretches mid-file. Right length, right average loudness. The hole only
+existed in the middle.
 
 ```python
-assert_no_dead_air("lesson-1.2.mp4", max_silence=3.0)
+assert_no_dead_air("episode-12.mp3", max_silence=3.0)
 ```
 ```
 6.2s of silence starting at 0:41 exceeds the 3s limit -- a gap this long
-mid-file is a dropped segment, not a pause (2 found in total): lesson-1.2.mp4
+mid-file is a dropped segment, not a pause (2 found in total): episode-12.mp3
 ```
 
-**The wrong person on screen.** A script said "I'm Jordan" while the registry
-assigned Alex. An entire module rendered with the wrong face and the wrong
-gender. **Every other gate passed.**
+**The wrong person speaking.** A script said "I'm Jordan" while the system had
+assigned Alex. A whole module rendered with the wrong face and the wrong voice.
+**Every other gate passed.**
 
 ```python
 assert_speaker(script, expected="Alex", known_names=["Alex", "Jordan", "Sam"])
@@ -98,101 +134,77 @@ is wrong: the assigned presenter, or the name in the script
 The `known_names` roster is required, and it's the whole trick: without it, a
 character in a scenario saying *"I'm Rosa, a nurse"* trips the check on every
 script that tells a story. Only a name belonging to someone who could actually
-have been cast counts as a claim about the presenter.
+have been cast counts as a claim about the speaker.
 
 **Things you can only see.** Overflowing titles, colliding logos, half-empty
 canvases, figures cropped mid-caption. All rendered without error.
 
 ```python
-looks_ok(
-    "slide-14.png",
-    [
-        "the title fits on one line",
-        "no text is clipped at any edge",
-    ],
-)
+looks_ok("slide-14.png", ["the title fits on one line", "no text is clipped"])
 ```
 ```
 [major] slide-14.png: the title wraps to three lines and overlaps the logo in
 the top-right corner -- failed rubric item: 'the title fits on one line'
 ```
 
----
-
-## Quickstart
-
-The first five checks need **no API key, no network, and no model**. If you have
-`ffmpeg` — and if you're generating media, you do — you're ready:
-
-```bash
-pip install silentfail
-silentfail check lesson-1.2.mp4 --script lesson-1.2.vtt
-```
-
-```
-  FAIL  pace      narration pace 300 WPM exceeds 245 (300 words in 60.0s) -- …
-  PASS  loudness  -16.0 LUFS
-  FAIL  dead air  6.2s of silence starting at 0:41 exceeds the 3s limit -- …
-
-  1 passed, 2 failed, 0 skipped
-```
-
-Exit code is 1 if anything failed, so it drops straight into CI.
-
-In pytest, they're just asserts — no plugin, no fixtures:
-
-```python
-import pytest
-from silentfail import assert_pace, assert_loudness
-
-
-@pytest.mark.parametrize("lesson", LESSONS)
-def test_lesson_is_shippable(lesson):
-    assert_pace(lesson.mp4, lesson.vtt)
-    assert_loudness(lesson.mp4)
-```
-
-`looks_ok` is the only check that needs a key:
-
-```bash
-pip install "silentfail[vision]"
-export ANTHROPIC_API_KEY=...
-```
+This is the only check that needs a key: `pip install "silentfail[vision]"`.
 
 ---
+
+## Found on real files
+
+Not a synthetic benchmark. Pointed at the output of a production pipeline that
+renders narrated video at scale:
+
+| | result |
+|---|---|
+| A course known to be good | clean — 162 WPM, −14.1 LUFS, no dead air |
+| Content re-rendered *after* a loudness fix landed | **passes** at −14.2 LUFS |
+| Four episodes rendered *before* that fix | **fails** at −19.4 to −21.3 LUFS |
+
+It drew the line exactly where the fix landed, on files it was never told
+anything about, agreeing with a conclusion humans had reached months earlier —
+and produced no false positives across the clean set.
 
 ## Two promises
 
 **It fails open on infrastructure.** No ffmpeg, no key, no network, no
 measurement → it warns and passes. A gate that blocks your pipeline because of
-its *own* breakage gets deleted within a week, and then it's protecting nothing.
-A defect fails closed; the checker fails open. (A missing file is your typo, not
+its *own* breakage gets deleted within a week, and then it protects nothing. A
+defect fails closed; the checker fails open. (A missing file is your typo, not
 infrastructure — that still raises.)
 
-**Silence is never mistaken for success.** A check that couldn't run says so, in
-the CLI output and as a `silentfail.Skipped` warning. An empty run never reads as
-a clean one.
+**Silence is never mistaken for success.** A check that couldn't run says so, as
+a `silentfail.Skipped` warning and in the CLI output. An empty run never reads
+as a clean one.
 
----
+We had to earn the second one. The first cut of this library returned **PASS**
+for a file with no audio track at all — `silencedetect` reports nothing when
+there is nothing to analyse, and that read as "no silence found". A silent
+failure inside silentfail. It is now the loudest failure in the suite, with a
+regression test named after it, and the line it taught us is the rule everything
+else follows: *if we measured and it is wrong, fail closed; if we could not
+measure, fail open.*
 
 ## What it does not check
 
-Being explicit, because a QA tool that implies more coverage than it has is worse
-than none:
+Being explicit, because a QA tool that implies more coverage than it has is
+worse than none:
 
 - **Lip sync, A/V drift, and video quality.** Nothing here decodes video frames.
-- **Whether the narration is *correct*** — only how fast it's read. Groundedness
-  and factual accuracy are a different problem, well covered by the LLM-eval
-  tools.
+- **Whether the narration is *correct*** — only how fast it's read.
+  Groundedness and factual accuracy are a different problem, well covered by the
+  LLM-eval tools.
 - **Speech intelligibility.** Loudness is not clarity; a correctly-levelled
   track can still be mumbled.
 - **Music, mixing, or anything non-speech.** The defaults assume spoken word.
 - **The rubric you didn't write.** `looks_ok` only checks what you ask it to.
 
-Every threshold is an argument, not a constant. If `245` is wrong for your
-content, pass a different number — the defaults are a starting point from one
-domain, not a standard.
+## More
 
-## License
+- [Reference and tuning](docs/README.md) — every threshold, and when to turn a
+  check off
+- [Contributing](CONTRIBUTING.md) — the bar for a new check
+- [Changelog](CHANGELOG.md)
 
-MIT
+MIT.

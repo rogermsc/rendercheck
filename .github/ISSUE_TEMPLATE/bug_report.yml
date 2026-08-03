@@ -1,0 +1,58 @@
+name: Bug report
+description: A check fired when it shouldn't have, or stayed quiet when it should have fired
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The two failure modes worth reporting fastest:
+        a **false pass** (a defective file the check called clean) and a
+        **false failure** (a fine file the check flagged). Both matter; the
+        first matters more.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Which check, and what did it do instead of the right thing?
+      placeholder: assert_no_dead_air passed on a file that has a 9-second gap at 1:12
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output of `silentfail check <file> --json`
+      description: >
+        Paste the JSON. If the file is sensitive, redact the path — everything
+        else in the report is measurements.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: media
+    attributes:
+      label: What the file is
+      description: >
+        Container and codec, duration, whether it has an audio stream, and how
+        it was produced (which TTS or video tool). `ffprobe -hide_banner -i
+        <file>` covers most of it.
+    validations:
+      required: true
+
+  - type: input
+    id: ffmpeg
+    attributes:
+      label: ffmpeg version
+      description: First line of `ffmpeg -version`
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: silentfail and Python version
+      placeholder: "silentfail 0.1.0, Python 3.12, macOS 15"
+    validations:
+      required: true
