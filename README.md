@@ -1,5 +1,6 @@
 # silentfail
 
+[![PyPI](https://img.shields.io/pypi/v/silentfail)](https://pypi.org/project/silentfail/)
 [![CI](https://github.com/rogermsc/silentfail/actions/workflows/ci.yml/badge.svg)](https://github.com/rogermsc/silentfail/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.14-blue)](https://github.com/rogermsc/silentfail)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -37,7 +38,7 @@ no network calls** — if you have `ffmpeg`, you're ready.
 ## Quickstart
 
 ```bash
-pip install git+https://github.com/rogermsc/silentfail   # PyPI release pending
+pip install silentfail
 silentfail check episode-12.mp3 --script episode-12.vtt
 ```
 
