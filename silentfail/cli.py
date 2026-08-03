@@ -6,6 +6,7 @@ skipped and *said out loud*, so an empty run never reads as a clean one.
 """
 
 import argparse
+import json
 import sys
 import warnings
 from pathlib import Path
@@ -83,6 +84,8 @@ def main(argv=None) -> int:
     parser.add_argument("--max-wpm", type=float, default=245.0)
     parser.add_argument("--target-lufs", type=float, default=-16.0)
     parser.add_argument("--max-silence", type=float, default=3.0)
+    parser.add_argument("--json", action="store_true",
+                        help="machine-readable results on stdout, for calling from another pipeline")
     args = parser.parse_args(argv)
 
     results = []
@@ -93,13 +96,21 @@ def main(argv=None) -> int:
         name, check, call_args, call_kwargs = item
         results.append(_run(name, check, *call_args, **call_kwargs))
 
-    width = max(len(name) for _, name, _ in results)
-    for status, name, detail in results:
-        print(f"  {status}  {name:<{width}}  {detail}")
-
     failures = sum(1 for status, _, _ in results if status == FAIL)
     skips = sum(1 for status, _, _ in results if status == SKIP)
-    print(f"\n{len(results) - failures - skips} passed, {failures} failed, {skips} skipped")
+
+    if args.json:
+        print(json.dumps({
+            "file": str(args.file),
+            "results": [{"status": s, "check": n, "detail": d} for s, n, d in results],
+            "failed": failures,
+            "skipped": skips,
+        }))
+    else:
+        width = max(len(name) for _, name, _ in results)
+        for status, name, detail in results:
+            print(f"  {status}  {name:<{width}}  {detail}")
+        print(f"\n{len(results) - failures - skips} passed, {failures} failed, {skips} skipped")
     return 1 if failures else 0
 
 
