@@ -11,11 +11,12 @@ import subprocess
 import sys
 import tempfile
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silentfail import (  # noqa: E402
+from silentfail import (
     SilentFail,
     Skipped,
     assert_duration,
@@ -24,7 +25,7 @@ from silentfail import (  # noqa: E402
     assert_pace,
     assert_speaker,
 )
-from silentfail.text import read_script  # noqa: E402
+from silentfail.text import read_script
 
 FIXTURES = Path(tempfile.gettempdir()) / "silentfail-fixtures"
 
@@ -35,37 +36,79 @@ def _ffmpeg(*args):
 
 def build_fixtures():
     FIXTURES.mkdir(exist_ok=True)
-    tone, quiet, silence, minute, bogus = (
-        FIXTURES / n for n in ("tone.wav", "quiet.wav", "silence.wav", "minute.wav", "bogus.mp4")
+    tone, quiet, silence, minute, bogus, noaudio = (
+        FIXTURES / n
+        for n in (
+            "tone.wav",
+            "quiet.wav",
+            "silence.wav",
+            "minute.wav",
+            "bogus.mp4",
+            "noaudio.mp4",
+        )
     )
+    if not noaudio.exists():
+        # Video with no audio track at all — not a silent track, no track.
+        _ffmpeg("-f", "lavfi", "-i", "color=c=blue:s=320x240", "-t", "5", str(noaudio))
     if not tone.exists():
-        _ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=10",
-                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", str(tone))
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=10",
+            "-af",
+            "loudnorm=I=-16:TP=-1.5:LRA=11",
+            str(tone),
+        )
     if not quiet.exists():
         # -34 LUFS: the real incident level, cut against avatar footage at -13.
-        _ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=10",
-                "-af", "loudnorm=I=-34:TP=-1.5:LRA=11", str(quiet))
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=10",
+            "-af",
+            "loudnorm=I=-34:TP=-1.5:LRA=11",
+            str(quiet),
+        )
     if not silence.exists():
-        _ffmpeg("-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "10", str(silence))
+        _ffmpeg(
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "10", str(silence)
+        )
     if not minute.exists():
-        _ffmpeg("-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "60", str(minute))
+        _ffmpeg(
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "60", str(minute)
+        )
     bogus.write_text("this is not a video")  # for the fail-open check
-    return tone, quiet, silence, minute, bogus
+    return tone, quiet, silence, minute, bogus, noaudio
 
 
-TONE, QUIET, SILENCE, MINUTE, BOGUS = build_fixtures()
+TONE, QUIET, SILENCE, MINUTE, BOGUS, NOAUDIO = build_fixtures()
 
 
-def raises(check, *args, **kwargs) -> str:
+def measured(value: float | None) -> float:
+    """Assert the check actually measured something, and narrow the type.
+
+    A check that skips returns None. Without this, `round(None)` would be the
+    only signal — and a silently-skipped check masquerading as a pass is the
+    exact failure mode this library exists to prevent, so the tests refuse it.
+    """
+    assert value is not None, "check skipped when it should have measured"
+    return value
+
+
+def raises(check: Callable[..., object], *args: object, **kwargs: object) -> str:
     """Assert `check` raises SilentFail, and hand back the message."""
     try:
         check(*args, **kwargs)
     except SilentFail as exc:
         return str(exc)
-    raise AssertionError(f"{check.__name__} should have failed on {args!r}")
+    name = getattr(check, "__name__", repr(check))
+    raise AssertionError(f"{name} should have failed on {args!r}")
 
 
 # --- pace: the machine-gun defect ------------------------------------------
+
 
 def test_pace_flags_machine_gun():
     # 300 words over exactly 60s = 300 WPM.
@@ -74,7 +117,7 @@ def test_pace_flags_machine_gun():
 
 
 def test_pace_accepts_a_normal_delivery():
-    assert round(assert_pace(MINUTE, " ".join(["word"] * 200))) == 200
+    assert round(measured(assert_pace(MINUTE, " ".join(["word"] * 200)))) == 200
 
 
 def test_pace_flags_a_drag():
@@ -93,6 +136,7 @@ def test_pace_reads_a_vtt_and_ignores_its_cues():
 
 # --- loudness: the -34-against-a--13 defect ---------------------------------
 
+
 def test_loudness_flags_an_inaudible_track():
     assert "quieter than" in raises(assert_loudness, QUIET)
 
@@ -102,10 +146,11 @@ def test_loudness_flags_digital_silence():
 
 
 def test_loudness_accepts_a_normalised_track():
-    assert abs(assert_loudness(TONE, tol=3.0) - (-16.0)) <= 3.0
+    assert abs(measured(assert_loudness(TONE, tol=3.0)) - (-16.0)) <= 3.0
 
 
 # --- duration: the cached-truncated-segment defect --------------------------
+
 
 def test_duration_distinguishes_truncation_from_a_short_take():
     truncated = raises(assert_duration, TONE, 30.0)
@@ -115,10 +160,11 @@ def test_duration_distinguishes_truncation_from_a_short_take():
 
 
 def test_duration_accepts_the_expected_length():
-    assert round(assert_duration(TONE, 10.0)) == 10
+    assert round(measured(assert_duration(TONE, 10.0))) == 10
 
 
 # --- dead air: the silent-compositing-failure defect ------------------------
+
 
 def test_dead_air_flags_a_hole():
     assert "of silence starting at 0:00" in raises(assert_no_dead_air, SILENCE)
@@ -144,7 +190,9 @@ def test_speaker_ignores_characters_who_are_not_on_the_roster():
 
 
 def test_speaker_accepts_the_right_presenter():
-    assert_speaker("My name is Alex and I'll be walking you through this.", "Alex", ROSTER)
+    assert_speaker(
+        "My name is Alex and I'll be walking you through this.", "Alex", ROSTER
+    )
 
 
 def test_speaker_requires_a_roster():
@@ -159,13 +207,16 @@ def test_speaker_requires_a_roster():
 # --- looks_ok: severity handling, with a stub in place of the model ---------
 # The model's judgement is not ours to test; how we act on it is.
 
+
 def _stub_client(findings, stop_reason="end_turn"):
     import json
     import types
 
     response = types.SimpleNamespace(
         stop_reason=stop_reason,
-        content=[types.SimpleNamespace(type="text", text=json.dumps({"findings": findings}))],
+        content=[
+            types.SimpleNamespace(type="text", text=json.dumps({"findings": findings}))
+        ],
     )
     return types.SimpleNamespace(
         messages=types.SimpleNamespace(create=lambda **kwargs: response)
@@ -175,7 +226,9 @@ def _stub_client(findings, stop_reason="end_turn"):
 def _slide():
     png = FIXTURES / "slide.png"
     if not png.exists():
-        _ffmpeg("-f", "lavfi", "-i", "color=c=white:s=320x180", "-frames:v", "1", str(png))
+        _ffmpeg(
+            "-f", "lavfi", "-i", "color=c=white:s=320x180", "-frames:v", "1", str(png)
+        )
     return png
 
 
@@ -226,7 +279,58 @@ def test_looks_ok_rejects_an_empty_rubric():
         raise AssertionError("an empty rubric checks nothing and must be rejected")
 
 
+# --- the regression that named the library ----------------------------------
+# v0.1.0 returned PASS for a file with no audio track: silencedetect reports
+# nothing when there is nothing to analyse, and that read as "no silence found".
+# A silent failure inside silentfail. It must never come back.
+
+
+def test_a_missing_audio_track_is_a_failure_not_a_pass():
+    for check in (assert_no_dead_air, assert_loudness):
+        message = raises(check, NOAUDIO)
+        assert "no audio stream" in message, f"{check.__name__}: {message}"
+
+
+def test_pace_says_why_it_cannot_judge_a_silent_video():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert assert_pace(NOAUDIO, "a handful of words to time") is None
+    assert any("no audio stream" in str(w.message) for w in caught)
+
+
+def test_digital_silence_reads_differently_from_a_missing_track():
+    # Same symptom to a viewer, different cause and different fix.
+    assert "digital silence" in raises(assert_loudness, SILENCE)
+    assert "missing track" in raises(assert_loudness, NOAUDIO)
+
+
+# --- one decode, not two ----------------------------------------------------
+
+
+def test_loudness_and_dead_air_share_a_single_decode():
+    from silentfail import _ffmpeg
+
+    _ffmpeg._measure.cache_clear()
+    before = _ffmpeg._measure.cache_info().misses
+    assert_loudness(TONE)
+    assert_no_dead_air(TONE)
+    decodes = _ffmpeg._measure.cache_info().misses - before
+    assert decodes == 1, f"expected 1 decode for two checks, did {decodes}"
+
+
+def test_a_rewritten_file_is_measured_again():
+    # The cache is keyed on (path, mtime, size), so measure -> fix -> re-measure
+    # in one process reports the new file, not the stale reading.
+
+    scratch = FIXTURES / "rewritten.wav"
+    scratch.write_bytes(TONE.read_bytes())
+    assert abs(measured(assert_loudness(scratch, tol=3.0)) - (-16.0)) <= 3.0
+    scratch.write_bytes(QUIET.read_bytes())
+    assert "quieter than" in raises(assert_loudness, scratch)
+
+
 # --- fail open: the checker never blocks on its own breakage -----------------
+
 
 def test_unmeasurable_media_warns_instead_of_failing():
     with warnings.catch_warnings(record=True) as caught:
@@ -251,7 +355,7 @@ if __name__ == "__main__":
         try:
             test()
             print(f"  ok    {test.__name__}")
-        except Exception as exc:  # noqa: BLE001 -- this is the test reporter
+        except Exception as exc:
             failed += 1
             print(f"  FAIL  {test.__name__}: {exc}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")

@@ -7,9 +7,14 @@ not measurable with ffprobe.
 Requires the optional extra:  pip install "silentfail[vision]"
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import os
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
 from ._core import SilentFail, existing, skip
 
@@ -48,7 +53,10 @@ _SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["critical", "major", "minor"],
+                    },
                     "rubric_item": {"type": "string"},
                     "note": {"type": "string"},
                 },
@@ -62,7 +70,13 @@ _SCHEMA = {
 }
 
 
-def looks_ok(image, rubric, *, model="claude-opus-5", client=None) -> list[dict] | None:
+def looks_ok(
+    image: str | Path,
+    rubric: Iterable[str],
+    *,
+    model: str = "claude-opus-5",
+    client: Any = None,
+) -> list[dict[str, str]] | None:
     """Check a rendered image against `rubric`, a list of plain-English claims.
 
     The incident: slide titles that wrapped to three lines and collided with the
@@ -76,8 +90,8 @@ def looks_ok(image, rubric, *, model="claude-opus-5", client=None) -> list[dict]
                                   "no text is clipped at any edge"])
     """
     path = existing(image)
-    rubric = [str(item).strip() for item in rubric if str(item).strip()]
-    if not rubric:
+    claims = [str(item).strip() for item in rubric if str(item).strip()]
+    if not claims:
         raise ValueError("rubric is empty: there is nothing to check the image against")
 
     media_type = _MEDIA_TYPES.get(path.suffix.lower())
@@ -96,38 +110,46 @@ def looks_ok(image, rubric, *, model="claude-opus-5", client=None) -> list[dict]
 
             client = anthropic.Anthropic()
         prompt = "Check this image against each of the following:\n" + "\n".join(
-            f"{n}. {item}" for n, item in enumerate(rubric, 1)
+            f"{n}. {item}" for n, item in enumerate(claims, 1)
         )
         response = client.messages.create(
             model=model,
             max_tokens=16000,
             system=_SYSTEM,
             output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": base64.b64encode(path.read_bytes()).decode(),
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": base64.b64encode(path.read_bytes()).decode(),
+                            },
                         },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
         )
         if response.stop_reason == "refusal":
             skip(f"looks_ok: the model declined to review {path}")
             return None
         body = "".join(b.text for b in response.content if b.type == "text")
-        findings = json.loads(body)["findings"]
+        # Shape is guaranteed by the structured-output schema above, so this
+        # annotation is a contract with mypy, not an unchecked assumption.
+        findings: list[dict[str, str]] = json.loads(body)["findings"]
     except ImportError:
         skip('looks_ok: needs the vision extra -- pip install "silentfail[vision]"')
         return None
-    except Exception as exc:  # noqa: BLE001 -- deliberate fail-open boundary
-        detail = "no ANTHROPIC_API_KEY set" if not os.environ.get("ANTHROPIC_API_KEY") else exc
+    except Exception as exc:
+        detail = (
+            "no ANTHROPIC_API_KEY set"
+            if not os.environ.get("ANTHROPIC_API_KEY")
+            else exc
+        )
         skip(f"looks_ok: could not review {path} ({detail})")
         return None
 

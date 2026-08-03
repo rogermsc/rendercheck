@@ -104,10 +104,13 @@ have been cast counts as a claim about the presenter.
 canvases, figures cropped mid-caption. All rendered without error.
 
 ```python
-looks_ok("slide-14.png", [
-    "the title fits on one line",
-    "no text is clipped at any edge",
-])
+looks_ok(
+    "slide-14.png",
+    [
+        "the title fits on one line",
+        "no text is clipped at any edge",
+    ],
+)
 ```
 ```
 [major] slide-14.png: the title wraps to three lines and overlaps the logo in
@@ -141,6 +144,7 @@ In pytest, they're just asserts — no plugin, no fixtures:
 ```python
 import pytest
 from silentfail import assert_pace, assert_loudness
+
 
 @pytest.mark.parametrize("lesson", LESSONS)
 def test_lesson_is_shippable(lesson):

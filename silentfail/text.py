@@ -4,7 +4,10 @@ Text is where the cheapest catches live: a mismatch here costs a regex, while
 the same mistake caught after rendering costs a full synthesis and avatar run.
 """
 
+from __future__ import annotations
+
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from ._core import SilentFail
@@ -23,7 +26,7 @@ def _strip_cues(text: str) -> str:
     return _TAG.sub(" ", "\n".join(kept))
 
 
-def read_script(script) -> str:
+def read_script(script: str | Path) -> str:
     """Accept raw text, or a path to a transcript, .vtt, or .srt.
 
     Subtitles sit next to the media far more often than a clean transcript does,
@@ -42,7 +45,9 @@ def read_script(script) -> str:
     return _strip_cues(text) if path.suffix.lower() in (".vtt", ".srt") else text
 
 
-def assert_speaker(script, expected, known_names) -> None:
+def assert_speaker(
+    script: str | Path, expected: str, known_names: Iterable[str]
+) -> None:
     """The script's self-introduction against the presenter actually assigned.
 
     The incident: a script said "I'm Jordan" while the registry assigned Alex.
@@ -56,7 +61,11 @@ def assert_speaker(script, expected, known_names) -> None:
     who could actually have been cast counts as a claim about the presenter.
     It is required for that reason -- there is no safe default.
     """
-    roster = {str(name).strip().split()[0].casefold() for name in known_names if str(name).strip()}
+    roster = {
+        str(name).strip().split()[0].casefold()
+        for name in known_names
+        if str(name).strip()
+    }
     if not roster:
         raise ValueError(
             "known_names is empty: without a roster of real presenters this "
@@ -64,7 +73,9 @@ def assert_speaker(script, expected, known_names) -> None:
         )
     assigned = str(expected).strip().split()[0].casefold()
 
-    claimed = dict.fromkeys(_SELF_INTRO.findall(read_script(script)))  # ordered, deduped
+    claimed = dict.fromkeys(
+        _SELF_INTRO.findall(read_script(script))
+    )  # ordered, deduped
     wrong = [n for n in claimed if n.casefold() in roster and n.casefold() != assigned]
     if wrong:
         others = f" (also: {', '.join(wrong[1:])})" if len(wrong) > 1 else ""

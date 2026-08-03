@@ -12,6 +12,8 @@ Two rules, both learned the expensive way in a production media pipeline:
    A *defect* fails closed; the *checker* fails open.
 """
 
+from __future__ import annotations
+
 import warnings
 from pathlib import Path
 
@@ -33,7 +35,7 @@ def skip(reason: str) -> None:
     warnings.warn(reason, Skipped, stacklevel=3)
 
 
-def existing(path) -> Path:
+def existing(path: str | Path) -> Path:
     """Resolve `path`, raising if it is missing.
 
     A missing file is a caller mistake, not an infrastructure failure, so it

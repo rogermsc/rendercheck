@@ -1,13 +1,17 @@
 """Deterministic checks on generated audio and video.
 
-No model, no API key, no network. These are the checks that catch the defects
-a test suite cannot see because nothing throws: the narration is too fast, the
-voice track is inaudible next to the avatar, the segment rendered at 40% length,
-the composite left a hole in the middle of the lesson.
+No model, no API key, no network. These catch the defects a test suite cannot
+see because nothing throws: the narration is too fast, the voice track is
+inaudible next to the footage it's cut against, the segment rendered at 40%
+length, the composite left a hole in the middle.
 
-Every default here is a threshold that was set by a real defect, not chosen for
-symmetry. Change them freely -- they are arguments, not constants.
+Every default here was set by a real defect, not chosen for symmetry. They are
+arguments, not constants -- change them freely for your content.
 """
+
+from __future__ import annotations
+
+from pathlib import Path
 
 from . import _ffmpeg
 from ._core import SilentFail, existing, skip, timestamp
@@ -15,7 +19,29 @@ from ._ffmpeg import ToolUnavailable
 from .text import read_script
 
 
-def assert_pace(media, script, *, max_wpm=245.0, min_wpm=110.0) -> float | None:
+def _require_audio(media: str | Path) -> None:
+    """Fail if the file carries no audio stream.
+
+    Note this fails *closed* while most trouble here fails open. The difference
+    is that "there is no audio stream" is a measurement, not a failure to
+    measure -- we asked the file and it answered. Failing open is for when we
+    cannot tell.
+    """
+    if not _ffmpeg.has_audio(media):
+        raise SilentFail(
+            f"{media} has no audio stream at all -- this is not silence, it is a "
+            f"missing track, and it usually means a mux step dropped the audio or "
+            f"was never given any. Nothing downstream will play sound"
+        )
+
+
+def assert_pace(
+    media: str | Path,
+    script: str | Path,
+    *,
+    max_wpm: float = 245.0,
+    min_wpm: float = 110.0,
+) -> float | None:
     """Narration speed, in words per minute.
 
     The incident: a voice chosen to match a presenter's *face* narrated English
@@ -32,6 +58,9 @@ def assert_pace(media, script, *, max_wpm=245.0, min_wpm=110.0) -> float | None:
         skip(f"pace: no words found in the script for {media}")
         return None
     try:
+        if not _ffmpeg.has_audio(media):
+            skip(f"pace: {media} has no audio stream -- there is no delivery to time")
+            return None
         seconds = _ffmpeg.duration(media)
     except ToolUnavailable as exc:
         skip(f"pace: {exc}")
@@ -56,27 +85,31 @@ def assert_pace(media, script, *, max_wpm=245.0, min_wpm=110.0) -> float | None:
     return wpm
 
 
-def assert_loudness(media, *, target_lufs=-16.0, tol=2.0) -> float | None:
+def assert_loudness(
+    media: str | Path, *, target_lufs: float = -16.0, tol: float = 2.0
+) -> float | None:
     """Integrated loudness, in LUFS.
 
     The incident: synthesised narration landed at -34 LUFS and was concatenated
-    with avatar footage at -13. Same file, same lesson, a 20 dB step in the
-    middle. Nothing failed; viewers just rode the volume knob for 45 minutes.
+    with footage at -13. Same file, same lesson, a 20 dB step in the middle.
+    Nothing failed; viewers just rode the volume knob for 45 minutes.
 
     -16 LUFS is the usual target for spoken-word web video. Returns the
     measured loudness, or None if it could not be measured.
     """
     existing(media)
     try:
-        measured = _ffmpeg.loudness(media)
+        _require_audio(media)
+        measured = _ffmpeg.measure(media).loudness
     except ToolUnavailable as exc:
         skip(f"loudness: {exc}")
         return None
 
     if measured == float("-inf"):
         raise SilentFail(
-            f"{media} is digital silence -- there is no audio in it at all, "
-            f"which is what a failed mux or a dropped audio stream looks like"
+            f"{media} carries an audio stream but it is digital silence -- "
+            f"every sample is zero, which is what a failed render or a muted "
+            f"mix looks like"
         )
     delta = measured - target_lufs
     if abs(delta) > tol:
@@ -90,7 +123,13 @@ def assert_loudness(media, *, target_lufs=-16.0, tol=2.0) -> float | None:
     return measured
 
 
-def assert_duration(media, expected_seconds, *, tol=0.5, min_ratio=0.5) -> float | None:
+def assert_duration(
+    media: str | Path,
+    expected_seconds: float,
+    *,
+    tol: float = 0.5,
+    min_ratio: float = 0.5,
+) -> float | None:
     """Actual length against what was expected.
 
     The incident: encode failures produced segments a fraction of their intended
@@ -121,13 +160,15 @@ def assert_duration(media, expected_seconds, *, tol=0.5, min_ratio=0.5) -> float
     if abs(actual - expected_seconds) > tol:
         raise SilentFail(
             f"{media} is {actual:.1f}s, expected {expected_seconds:.1f}s "
-            f"(off by {actual - expected_seconds:+.1f}s) -- audio and slides "
+            f"(off by {actual - expected_seconds:+.1f}s) -- audio and picture "
             f"will drift out of sync downstream"
         )
     return actual
 
 
-def assert_no_dead_air(media, *, max_silence=3.0, threshold_db=-50.0) -> float | None:
+def assert_no_dead_air(
+    media: str | Path, *, max_silence: float = 3.0, threshold_db: float = -50.0
+) -> float | None:
     """Longest silent stretch, in seconds.
 
     The incident: compositing steps failed transiently *and silently*, leaving
@@ -138,7 +179,10 @@ def assert_no_dead_air(media, *, max_silence=3.0, threshold_db=-50.0) -> float |
     """
     existing(media)
     try:
-        gaps = _ffmpeg.silences(media, threshold_db, max_silence)
+        _require_audio(media)
+        gaps = _ffmpeg.measure(
+            media, threshold_db=threshold_db, min_seconds=max_silence
+        ).silences
     except ToolUnavailable as exc:
         skip(f"dead air: {exc}")
         return None

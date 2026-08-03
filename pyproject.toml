@@ -4,30 +4,89 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "silentfail"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Assertions for AI-generated media. The bugs don't throw; silentfail makes them throw."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Roger Simões" }]
-keywords = ["testing", "assertions", "eval", "video", "audio", "tts", "generative-ai", "qa"]
+keywords = [
+    "testing", "assertions", "eval", "evaluation", "qa",
+    "text-to-speech", "tts", "voice", "audio", "video",
+    "generative-ai", "ffmpeg", "loudness", "lufs",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Sound/Audio :: Analysis",
     "Topic :: Multimedia :: Video",
     "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
 ]
 # ffmpeg is a subprocess, not a dependency. The deterministic tier needs nothing.
 dependencies = []
 
 [project.optional-dependencies]
 vision = ["anthropic>=0.40"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
 
 [project.scripts]
 silentfail = "silentfail.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/rogermsc/silentfail"
+Documentation = "https://github.com/rogermsc/silentfail/blob/main/docs/README.md"
+Changelog = "https://github.com/rogermsc/silentfail/blob/main/CHANGELOG.md"
+Issues = "https://github.com/rogermsc/silentfail/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "silentfail.__version__" }
+
 [tool.setuptools.packages.find]
 include = ["silentfail*"]
+
+[tool.setuptools.package-data]
+silentfail = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["silentfail"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["silentfail", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["anthropic", "anthropic.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_calls = false
