@@ -23,6 +23,8 @@ from __future__ import annotations
 from statistics import median
 from typing import NamedTuple
 
+__all__ = ["Alignment", "Fit", "align", "speech_spans"]
+
 BIN_SECONDS = 0.1
 """Resolution of the comparison.
 
@@ -56,6 +58,14 @@ class Alignment(NamedTuple):
     False when every shift scores about the same, which is what continuous
     speech, a music bed, or a file with no silence structure produces. It means
     "cannot tell", never "aligned" -- the caller must skip rather than pass.
+    """
+
+    saturated: bool
+    """Whether the best fit sat at the edge of the search range.
+
+    `offset` is then a floor, not a measurement: the captions are at least that
+    far out and could be much further, or they belong to a different file
+    entirely. Still a failure -- just not one to quote a number for.
     """
 
 
@@ -114,16 +124,56 @@ def _score(
     return hits / total if total else 0.0
 
 
+class Fit(NamedTuple):
+    """The outcome of sliding one window of captions against the audio."""
+
+    shift: int
+    """Best-scoring shift, in bins."""
+
+    score: float
+    """Its score, 0 to 1."""
+
+    typical: float
+    """The median score across the search, which the best has to beat."""
+
+    saturated: bool
+    """Whether the best shift sat at the edge of the search range.
+
+    A fit at the edge means the real answer is *at least* this far out and
+    possibly much further -- the search simply ran out of room. Reporting the
+    edge value as a measurement would state a number nobody established.
+    """
+
+    empty: bool
+    """Whether the window held no captions at all.
+
+    Every shift then scores 0.0, the tie resolves arbitrarily, and the result is
+    noise. Common and harmless in the file: any stretch nobody spoke over.
+    """
+
+
 def _best_shift(
     captions: list[bool], speech: list[bool], reach: int, base: int = 0
-) -> tuple[int, float, float]:
-    """The shift that fits best, its score, and the typical score to beat."""
+) -> Fit:
+    """Slide `captions` across `speech` and report where it fits best."""
+    if not any(captions):
+        return Fit(shift=0, score=0.0, typical=0.0, saturated=False, empty=True)
+
     scores = [
         (_score(captions, speech, shift, base), shift)
         for shift in range(-reach, reach + 1)
     ]
-    best, shift = max(scores)
-    return shift, best, median(score for score, _ in scores)
+    # Ties break toward the *smallest* shift, not the largest. `max()` over
+    # (score, shift) would pick the biggest shift among equals, which turns
+    # every ambiguous fit into a confident claim that the captions are late.
+    best, shift = max(scores, key=lambda pair: (pair[0], -abs(pair[1])))
+    return Fit(
+        shift=shift,
+        score=best,
+        typical=median(score for score, _ in scores),
+        saturated=abs(shift) == reach,
+        empty=False,
+    )
 
 
 def align(
@@ -151,30 +201,47 @@ def align(
         return None
 
     reach = int(max_shift / BIN_SECONDS)
-    shift, best, typical = _best_shift(captioned, spoken, reach)
+    whole = _best_shift(captioned, spoken, reach)
 
     # Two ways to have learned nothing. A best fit that still misses half the
     # captions means these are not the captions for this audio (or the audio has
     # no usable silence structure). A best fit no better than the typical one
     # means every shift is equally good, which is what wall-to-wall speech looks
     # like -- there is no peak to read a number off.
-    distinct = best >= min_overlap and (best - typical) >= min_margin
+    distinct = (
+        whole.score >= min_overlap and (whole.score - whole.typical) >= min_margin
+    )
 
     # Drift: fit the two ends separately. A file recorded against one clock and
     # captioned against another needs a different shift at the end than at the
     # start, and no single correction fixes it.
     #
     # Both windows are fitted against the whole audio track, not against a
-    # matching slice of it -- see `_score`. The window still has to be larger
-    # than the search range for the fit to mean anything, which is all the guard
-    # is for; below that the reading is None rather than a fabricated zero.
+    # matching slice of it -- see `_score`. Three things disqualify the reading,
+    # and all three are ordinary rather than exotic:
+    #
+    #   * a window shorter than the search range, where the fit means little;
+    #   * a window holding no cues -- a title sequence, or the silence almost
+    #     every file ends on. Every shift scores 0.0 there, so the "best" one is
+    #     whichever the tie-break happened to pick;
+    #   * a window whose fit sat at the edge of the search range, where the real
+    #     shift is somewhere past it and unmeasured.
+    #
+    # Any of them and drift is None. Reporting the arithmetic anyway is how a
+    # perfectly-aligned file with a quiet ending gets told to re-generate its
+    # captions.
     third = count // 3
     drift = None
-    if distinct and third > reach:
-        head, _, _ = _best_shift(captioned[:third], spoken, reach)
-        tail, _, _ = _best_shift(captioned[-third:], spoken, reach, base=count - third)
-        drift = (tail - head) * BIN_SECONDS
+    if distinct and third > reach and not whole.saturated:
+        head = _best_shift(captioned[:third], spoken, reach)
+        tail = _best_shift(captioned[-third:], spoken, reach, base=count - third)
+        if not any((head.empty, tail.empty, head.saturated, tail.saturated)):
+            drift = (tail.shift - head.shift) * BIN_SECONDS
 
     return Alignment(
-        offset=shift * BIN_SECONDS, drift=drift, overlap=best, distinct=distinct
+        offset=whole.shift * BIN_SECONDS,
+        drift=drift,
+        overlap=whole.score,
+        distinct=distinct,
+        saturated=whole.saturated,
     )

@@ -15,7 +15,14 @@ Two rules, both learned the expensive way in a production media pipeline:
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+
+_collecting: ContextVar[list[str] | None] = ContextVar(
+    "rendercheck_skips", default=None
+)
 
 
 class SilentFail(AssertionError):
@@ -31,8 +38,40 @@ class Skipped(UserWarning):
 
 
 def skip(reason: str) -> None:
-    """Fail open: this check could not run, so it does not get a vote."""
+    """Fail open: this check could not run, so it does not get a vote.
+
+    Warns, unless something is `collect_skips()`-ing on this thread -- see there
+    for why the runner cannot use the warnings machinery for this.
+    """
+    sink = _collecting.get()
+    if sink is not None:
+        sink.append(reason)
+        return
     warnings.warn(reason, Skipped, stacklevel=3)
+
+
+@contextmanager
+def collect_skips() -> Iterator[list[str]]:
+    """Gather the skips raised on *this thread*, without touching global state.
+
+    `warnings.catch_warnings(record=True)` is documented as not thread-safe: it
+    swaps process-wide filters, so two threads inside it at once can have their
+    warnings land in each other's lists. The runner checks several files on a
+    thread pool, and a skip that lands in the wrong list leaves the check that
+    actually skipped looking like it returned nothing and reported nothing --
+    which the runner then records as a **pass**. An unmeasurable check counted
+    as green is the exact failure this library exists to catch, so the runner
+    collects through a `ContextVar` instead, which is per-thread by definition.
+
+    Library callers are unaffected: with no collector active `skip()` warns
+    exactly as it always has.
+    """
+    sink: list[str] = []
+    token = _collecting.set(sink)
+    try:
+        yield sink
+    finally:
+        _collecting.reset(token)
 
 
 def existing(path: str | Path) -> Path:

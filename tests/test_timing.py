@@ -7,6 +7,7 @@ with or without pytest:
     pytest tests/ -q
 """
 
+import hashlib
 import io
 import shutil
 import subprocess
@@ -32,12 +33,17 @@ from rendercheck import (
 from rendercheck import captions as _captions
 from rendercheck.text import find_captions, read_cues
 
-FIXTURES = Path(tempfile.gettempdir()) / "rendercheck-timing-fixtures"
-
 # Irregular on purpose: an evenly-spaced rhythm can slide onto itself, which
 # would make an offset look like a perfect fit at more than one shift.
 BURSTS = [(1.0, 4.0), (7.0, 3.5), (13.0, 5.0), (20.0, 3.5), (26.0, 6.0), (34.0, 4.0)]
 SPEECH_SECONDS = 40.0
+
+# The audio is expensive and cached between runs; the .vtt files are rewritten
+# every run from these same constants. Keying the directory on them means
+# editing BURSTS rebuilds the audio too, instead of leaving the two halves of
+# every caption test describing different things with nothing to say so.
+_SHAPE = hashlib.sha256(repr((BURSTS, SPEECH_SECONDS)).encode()).hexdigest()[:8]
+FIXTURES = Path(tempfile.gettempdir()) / f"rendercheck-timing-{_SHAPE}"
 
 
 def _ffmpeg(*args):
@@ -282,6 +288,111 @@ def test_captions_are_found_beside_the_media_without_a_flag():
     assert find_captions(SPEECH) is None
 
 
+# --- the regressions found by review, each one a false verdict --------------
+
+
+def test_an_offset_past_the_search_range_is_not_reported_as_a_number():
+    # It saturated at the edge instead: the real offset is somewhere past the
+    # range and was never measured. Quoting the edge value would be a confident
+    # wrong number, and at 12s out the sign inverted -- captions 12s LATE were
+    # reported as 1s early, then blamed on unfixable clock drift.
+    cues = [(1.0, 5.0), (7.0, 10.5), (13.0, 18.0), (20.0, 23.5), (26.0, 32.0)]
+    sil = [
+        (0.0, 1.0),
+        (5.0, 7.0),
+        (10.5, 13.0),
+        (18.0, 20.0),
+        (23.5, 26.0),
+        (32.0, 60.0),
+    ]
+    for shift in (12.0, 20.0):
+        moved = [(a + shift, b + shift) for a, b in cues]
+        fit = _captions.align(moved, sil, 60.0)
+        assert fit is not None and fit.saturated, (shift, fit)
+        # And no drift number built on an offset nobody measured.
+        assert fit.drift is None, (shift, fit)
+
+
+def test_captions_for_a_different_cut_are_named_as_that_rather_than_mistimed():
+    # Cues outside the media get clamped into the first or last bin, so they
+    # pile up at one end and yield a confident, small, wrong offset. Caught
+    # before the fit instead.
+    outside = FIXTURES / "different-cut.vtt"
+    _write_cues(outside, lambda start: start + 30.0)  # SPEECH is only 40s long
+    message = raises(assert_captions_aligned, SPEECH, outside)
+    assert "does not exist" in message, message
+    assert "different cut" in message, message
+
+    # ...but captions that are merely late overhang the end by exactly how late
+    # they are, and must still be reported as late rather than as a wrong cut.
+    assert "4.0s late" in raises(assert_captions_aligned, SPEECH, LATE)
+
+
+def test_a_third_with_no_cues_does_not_fabricate_drift():
+    # THE false FAIL. Almost every file ends on a beat of silence with no cue
+    # over it; that window scores 0.0 at every shift, the tie resolved to the
+    # largest, and a perfectly-aligned file was told to re-generate its captions.
+    cues = [(1.0, 5.0), (7.0, 10.5), (13.0, 18.0), (20.0, 23.5), (26.0, 32.0)]
+    sil = [
+        (0.0, 1.0),
+        (5.0, 7.0),
+        (10.5, 13.0),
+        (18.0, 20.0),
+        (23.5, 26.0),
+        (32.0, 60.0),
+    ]
+    fit = _captions.align(cues, sil, 60.0)
+    assert fit is not None, fit
+    assert abs(fit.offset) < 0.2, fit
+    assert fit.drift is None, f"drift invented from a window with no cues: {fit}"
+
+
+def test_a_tie_resolves_toward_no_offset_rather_than_toward_late():
+    # With two equally good shifts, claiming the larger one turns every
+    # ambiguous fit into a confident accusation that the captions are late.
+    speech = [True] * 200
+    captions = [False] * 90 + [True] * 20 + [False] * 90
+    fit = _captions._best_shift(captions, speech, reach=50)
+    assert fit.shift == 0, fit
+
+
+def test_a_frozen_stretch_running_to_the_end_of_the_file_is_caught():
+    # freezedetect prints freeze_start with no freeze_duration when the freeze
+    # is still running at EOF. Zipping without a terminator dropped it, so a
+    # video that stopped producing frames read as clean -- the headline defect
+    # the check exists for.
+    frozen = FIXTURES / "frozen-to-eof.mp4"
+    if not frozen.exists():
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=10:duration=3",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=gray:s=320x240:rate=10:duration=8",
+            "-filter_complex",
+            "[0][1]concat=n=2:v=1:a=0",
+            "-pix_fmt",
+            "yuv420p",
+            str(frozen),
+        )
+    from rendercheck import assert_not_frozen
+
+    assert "stops moving" in raises(assert_not_frozen, frozen)
+
+
+def test_a_timestamp_quoted_inside_caption_text_is_not_a_cue():
+    quoting = FIXTURES / "quoting.vtt"
+    quoting.write_text(
+        "WEBVTT\n\n"
+        "1\n00:00:01.000 --> 00:00:04.000\n"
+        "It runs from 00:00:30.000 --> 00:00:40.000, roughly.\n"
+    )
+    assert read_cues(quoting) == [(1.0, 4.0)], read_cues(quoting)
+
+
 # --- stream alignment -------------------------------------------------------
 
 
@@ -297,6 +408,29 @@ def test_streams_of_the_same_length_pass():
 
 def test_a_file_with_only_sound_skips_rather_than_passing():
     assert "only one of" in skips(assert_streams_aligned, SPEECH)
+
+
+def test_the_gap_is_measured_between_stream_endings_not_between_lengths():
+    # A stream ends at start + duration. Comparing durations alone reported a
+    # match for a file whose sound genuinely runs 1.5s past the picture -- and
+    # widening --max-start-skew to tolerate a known pre-roll silently threw the
+    # ending check away entirely.
+    from unittest.mock import patch
+
+    from rendercheck import _ffmpeg as probe
+    from rendercheck import media as m
+
+    offset = (
+        probe.Stream("video", 0.0, 8.0, 320, 240, 10.0, 10.0),
+        probe.Stream("audio", 1.5, 8.0, None, None, None, None),
+    )
+    with (
+        patch.object(probe, "streams", return_value=offset),
+        patch.object(m, "existing", lambda path: Path(path)),
+    ):
+        assert "sound" in raises(
+            assert_streams_aligned, "offset.mp4", max_start_skew=5.0
+        )
 
 
 def test_an_undeclared_duration_skips_rather_than_comparing_against_nothing():
@@ -354,6 +488,24 @@ def test_a_file_with_no_picture_skips_rather_than_passing():
     assert "no video stream" in skips(assert_format, SPEECH, width=1920)
 
 
+def test_undeclared_dimensions_skip_rather_than_pass_the_requirement():
+    # Returning silently here made the CLI record PASS for a size nothing was
+    # ever compared against -- the one spot in the file where "could not
+    # measure" read as "measured and fine".
+    from unittest.mock import patch
+
+    from rendercheck import _ffmpeg as probe
+    from rendercheck import media as m
+
+    blind = (probe.Stream("video", 0.0, 8.0, None, None, 10.0, 10.0),)
+    with (
+        patch.object(probe, "streams", return_value=blind),
+        patch.object(m, "existing", lambda path: Path(path)),
+    ):
+        reason = skips(assert_format, "blind.mp4", width=1920, height=1080)
+    assert "no picture dimensions" in reason, reason
+
+
 # --- true peak and presets --------------------------------------------------
 
 
@@ -371,7 +523,8 @@ def test_every_preset_is_a_usable_target():
     for name in presets.PRESETS:
         preset = presets.get(name)
         assert preset.tol > 0, name
-        assert preset.max_true_peak < 0, name  # a ceiling at 0 is not a ceiling
+        # None means "no ceiling stated"; a ceiling at 0 dBTP is not a ceiling.
+        assert preset.max_true_peak is None or preset.max_true_peak < 0, name
         assert preset.note, name
 
 
@@ -387,10 +540,18 @@ def test_an_unknown_preset_names_the_alternatives():
 def test_the_default_preset_matches_the_library_default():
     # `web` exists so the built-in default has a name. If they ever disagree,
     # `--preset web` would silently change behaviour rather than describe it.
+    #
+    # Read from `__kwdefaults__`, not `__defaults__`: these arguments are
+    # keyword-only, so `__defaults__` is None for *any* value and asserting on
+    # it passes even after someone changes the target to -18.
     from rendercheck.media import assert_loudness
 
-    assert presets.get(presets.DEFAULT).target_lufs == -16.0
-    assert assert_loudness.__defaults__ is None  # keyword-only, as intended
+    default = presets.get(presets.DEFAULT)
+    built_in = assert_loudness.__kwdefaults__ or {}
+    assert built_in["target_lufs"] == default.target_lufs
+    assert built_in["tol"] == default.tol
+    # And no peak ceiling, so naming the default is a no-op rather than a gate.
+    assert default.max_true_peak is None
 
 
 # --- config -----------------------------------------------------------------

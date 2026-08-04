@@ -74,9 +74,21 @@ jobs:
         with:
           name: dist
           path: dist/
+      # The terminator matches only the *version* link block at the foot of the
+      # file (`[0.3.0]: ...`, `[Unreleased]: ...`). Matching any `[x]:` line cut
+      # v0.3.0's notes in half at an ordinary markdown link reference sitting
+      # inside the section, and the release published with a section missing --
+      # silently, which is not a thing this repo gets to ship.
       - name: Extract changelog section
         run: |
-          awk -v ver="${GITHUB_REF_NAME#v}" '/^## \[/{p=($0 ~ "\\[" ver "\\]")} /^\[[^]]+\]:/{p=0} p' CHANGELOG.md > notes.md
+          awk -v ver="${GITHUB_REF_NAME#v}" '
+            /^## \[/           { p = ($0 ~ "\\[" ver "\\]") }
+            /^\[(Unreleased|[0-9])[^]]*\]: / { p = 0 }
+            p
+          ' CHANGELOG.md > notes.md
+          # A release whose notes came out empty is a broken release.
+          test -s notes.md || { echo "::error::no changelog section for $GITHUB_REF_NAME"; exit 1; }
+          grep -q '^## \[' notes.md || { echo "::error::notes lost their heading"; exit 1; }
       - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}

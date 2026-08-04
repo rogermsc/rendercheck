@@ -6,6 +6,112 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-04
+
+A review of 0.3.0 found fifteen ways it could report success without having
+established it — in a library whose entire premise is not doing that. Every one
+is fixed here with a test that fails without the fix. **Upgrade from 0.3.0.**
+
+### Fixed — checks that passed, or failed, on the wrong evidence
+
+- **`assert_captions_aligned` invented drift on correct files.** A window with
+  no cues in it — a title sequence, or the beat of silence almost every file
+  ends on — scores zero at every shift, the tie resolved to the largest, and a
+  perfectly-aligned caption file was told to re-generate itself against a
+  drift that did not exist. Measured: correct captions on a 60-second file with
+  a quiet tail reported 5.0s of drift. Drift is now `None` unless both windows
+  hold cues, neither saturates, and the whole-file fit did not saturate either.
+- **An offset past the search range saturated silently and lied about it.** At
+  6s out — a concat pre-roll, one second past the default range — the fit
+  clamped to the edge and the result was reported as unfixable clock drift; at
+  12s out the sign inverted, and captions twelve seconds *late* were described
+  as one second early. A fit at the edge is now reported as "more than Ns away,
+  the search ran out of room", which is the honest answer.
+- **Ties broke toward the largest shift**, turning every ambiguous fit into a
+  confident accusation that the captions were late. They break toward zero now.
+- **Cues outside the media were clamped into the first or last bin**, so a
+  caption file for a different, longer cut piled up at one end and produced a
+  small, confident, wrong offset. Named as what it is instead.
+- **`assert_streams_aligned` compared durations and ignored `start`.** A stream
+  ends at start + duration, so a mux offset by 1.5s whose sound genuinely ran
+  past the picture reported `PASS streams 0.0 s`. Worse, widening
+  `--max-start-skew` to tolerate a known pre-roll silently discarded the ending
+  check while still reporting that the endings matched.
+- **`assert_format` returned silently when the container declared no
+  dimensions**, which the CLI rendered as `PASS` for a size nothing had been
+  compared against. It skips, like every other unmeasurable path in the file.
+- **A freeze running to the end of the file was dropped entirely.**
+  `freezedetect` prints `freeze_start` with no `freeze_duration` when the freeze
+  is still running at EOF, and `zip` discarded it — so a video that stopped
+  producing frames and held one to the end reported `PASS frozen`. That is the
+  headline defect the check exists for, and it had been passing since 0.2.0.
+  The audio path already had this guard; the video path now does too.
+- **A timestamp quoted inside caption text became a phantom cue**, dragging the
+  alignment toward a moment nobody spoke at. Cue rows are matched at the start
+  of a line now, which is what they are.
+- **The promptfoo assertion graded `pass` when every check skipped.** A CI
+  container with the package installed but no ffmpeg passed every eval having
+  measured nothing. It now fails, and says how many checks skipped.
+
+### Fixed — crashes
+
+- **The MCP server died mid-session on `"params": null`**, on a JSON-RPC batch,
+  and on any bare scalar — all of which are things a real client sends. To the
+  client that is indistinguishable from a broken tool.
+- **Arguments the model guessed wrong killed the server.** argparse calls
+  `sys.exit()` on a value it will not accept, and `SystemExit` is a
+  `BaseException` that `except Exception` sails straight past: one
+  `preset: "youtub"` and the process was gone. Rejected arguments are now a
+  correctable answer, and `serve()` has a last-resort guard besides.
+- **A config file could set the `file` positional** and crash the run with an
+  `AttributeError`, because the whitelist was harvested from every argparse
+  destination including the positionals it must never allow.
+- **A `preset` typo in the config raised an uncaught `ValueError`** — a bare
+  traceback, on every subcommand including `demo` and `mcp`. The same typo as a
+  flag had always been handled cleanly.
+
+### Fixed — quietly wrong behaviour
+
+- **`check_media` reported `ok: true, clean` having measured nothing.** A
+  directory with no media in it, or no `path` at all (`Path("")` is the current
+  directory, which exists), returned a clean verdict. An agent whose render step
+  wrote no files was told its render was fine — by the surface built for agents.
+- **Config values bypassed argparse's `type=`, `choices` and `nargs`.**
+  `known_names = "Karl"` — the natural TOML for a one-name roster — arrived as a
+  string the speaker check iterated letter by letter, giving the roster
+  `{k, a, r, l}`, which can never match: `PASS` forever, the exact outcome the
+  CLI already refuses to ship on the flag path. `strict = "no"` turned strict
+  mode *on*. Config values are now checked the way flags are, and a value of the
+  wrong shape is reported rather than used.
+- **`--preset web` was not the no-op it is documented as**, adding a −1 dBTP
+  gate that no bare run applies. `web` exists to *name* the built-in defaults,
+  so it now carries no ceiling. The test that should have caught this asserted
+  `assert_loudness.__defaults__ is None`, which is a tautology for any
+  keyword-only function; it reads `__kwdefaults__` now.
+- **The image branch silently discarded `--expect-width/-height/-fps`**, so an
+  explicit size requirement on a PNG was never checked and never mentioned.
+- **Skips were collected with `warnings.catch_warnings`**, documented as not
+  thread-safe, while files are checked on a thread pool — so one file's skip
+  could be recorded against another, leaving the check that actually skipped
+  counted as a **pass**. Collection now runs through a `ContextVar`, which is
+  per-thread by definition. `collect_skips` is public, for callers who want the
+  same thing.
+- **`input_tp` parsing shared a `try` with the mandatory loudness reading**, so
+  an unreadable optional extra would have taken loudness and dead air down with
+  it.
+- **The release workflow published truncated notes.** Its `awk` stopped at any
+  `[x]:` line, and v0.3.0's own notes lost their `### Fixed` section to an
+  ordinary markdown link reference sitting mid-section. It now stops only at the
+  version-link block, and fails the release if the notes come out empty.
+- **A `pyproject.toml` that merely mentioned `[tool.rendercheck]`** — in a
+  comment, or in prose — halted the upward config search and hid the real config
+  above it. Matched at the start of a line now.
+
+### Changed
+
+- Audio-only measurement passes `-vn`, so checking a long video no longer
+  decodes every frame three times to read its sound.
+
 ## [0.3.0] - 2026-08-04
 
 Four checks and three surfaces, all chosen from what people outside this repo
@@ -79,8 +185,6 @@ are asking for rather than from what this pipeline happened to hit.
   caption timing from **lip sync**, which still needs a model and is still not
   here. The new checks do not narrow that disclaimer as much as they might look
   like they do.
-
-[ffsubsync]: https://github.com/smacke/ffsubsync
 
 ### Fixed
 
@@ -190,6 +294,9 @@ reachable only from Python (`--min-wpm`, `--loudness-tol`, `--duration-tol`,
   the file's `(path, mtime, size)` so a re-render is never served a stale
   reading.
 
-[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.1
 [0.3.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.0
 [0.2.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.2.0
+
+[ffsubsync]: https://github.com/smacke/ffsubsync

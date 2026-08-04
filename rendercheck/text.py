@@ -28,12 +28,19 @@ CAPTION_SUFFIXES = (".vtt", ".srt")
 """Caption formats we can read timings out of, most preferred first."""
 
 # `00:01:02.500 --> 00:01:05.000`, with hours optional and either separator.
-# VTT allows cue settings after the end time (`align:start position:50%`), so
-# the tail is deliberately unanchored.
+#
+# Anchored to the start of a line, because a timing row *is* a whole line. Left
+# unanchored it also matches a timestamp quoted inside caption text -- a lyric
+# sheet, a transcript of someone reading times aloud, a subtitle about
+# subtitles -- and every one of those becomes a phantom cue that drags the
+# alignment fit toward a moment nobody spoke at. VTT allows cue settings after
+# the end time (`align:start position:50%`), so only the tail stays open.
 _CUE_RANGE = re.compile(
+    r"^[ \t]*"
     r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})"
-    r"\s*-->\s*"
-    r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})"
+    r"[ \t]*-->[ \t]*"
+    r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})",
+    re.MULTILINE,
 )
 
 

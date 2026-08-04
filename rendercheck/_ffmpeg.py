@@ -236,6 +236,7 @@ def tail_level(path: str | Path, seconds: float = 0.25) -> float:
         "ffmpeg",
         [
             "-nostdin",
+            "-vn",
             "-sseof",
             f"-{seconds}",
             "-i",
@@ -268,7 +269,9 @@ def _volume(fingerprint: tuple[str, int, int]) -> Volume:
     path = fingerprint[0]
     proc = _run(
         "ffmpeg",
-        ["-nostdin", "-i", path, "-af", "volumedetect", "-f", "null", "-"],
+        # -vn: this reads audio, so decoding the picture is wasted work. On a
+        # long video that is most of the runtime of the check.
+        ["-nostdin", "-vn", "-i", path, "-af", "volumedetect", "-f", "null", "-"],
     )
     mean = re.search(r"mean_volume: (-?[\d.]+) dB", proc.stderr)
     if not mean:
@@ -328,6 +331,12 @@ def _measure_video(
     freeze_durations = [
         float(v) for v in re.findall(r"freeze_duration: ([\d.]+)", proc.stderr)
     ]
+    # A freeze still running when the file ends has a start and no duration --
+    # exactly the shape the silence parser guards against below, and exactly the
+    # defect this check exists for. Zipping without this drops it, and a video
+    # that stopped producing frames and held one to the end reads as clean.
+    if len(freeze_durations) < len(freeze_starts):
+        freeze_durations.append(max(duration(path) - freeze_starts[-1], 0.0))
     return VideoMeasurement(
         blacks=blacks,
         freezes=list(zip(freeze_starts, freeze_durations, strict=False)),
@@ -372,6 +381,7 @@ def _measure(
         "ffmpeg",
         [
             "-nostdin",
+            "-vn",
             "-i",
             path,
             "-af",
@@ -393,12 +403,19 @@ def _measure(
         # float() parses loudnorm's "-inf" for silence directly.
         readings = json.loads(blob.group(0))
         loudness = float(readings["input_i"])
-        # input_tp comes from the same pass, so it costs nothing. Older ffmpeg
-        # builds print it; treat a missing key as "not measured" rather than as
-        # a peak of zero, which would read as a file clipping at the ceiling.
-        true_peak = float(readings.get("input_tp", "-inf"))
     except (ValueError, KeyError, json.JSONDecodeError):
         raise ToolUnavailable(f"loudnorm output was unreadable for {path}") from None
+
+    # Parsed separately, and deliberately outside the block above: true peak is
+    # an optional extra that older ffmpeg builds may not print, and loudness and
+    # dead air both ride on this same decode. Letting an unreadable peak raise
+    # would take two working checks down with an optional one. A missing or bad
+    # reading is "not measured", never a peak of zero -- which would read as a
+    # file sitting right at the ceiling.
+    try:
+        true_peak = float(readings.get("input_tp", "-inf"))
+    except (TypeError, ValueError):
+        true_peak = float("-inf")
 
     starts = [float(v) for v in re.findall(r"silence_start: (-?[\d.]+)", proc.stderr)]
     ends = [float(v) for v in re.findall(r"silence_end: (-?[\d.]+)", proc.stderr)]

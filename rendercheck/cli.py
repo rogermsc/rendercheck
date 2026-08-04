@@ -11,7 +11,6 @@ import argparse
 import json
 import os
 import sys
-import warnings
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -19,7 +18,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import __version__, _ffmpeg, config, demo, presets
-from ._core import SilentFail, Skipped
+from ._core import SilentFail, collect_skips
 from ._ffmpeg import ToolUnavailable
 from .media import (
     assert_captions_aligned,
@@ -99,15 +98,17 @@ def _run(planned: Planned) -> Result:
     if planned.run is None:
         return Result(SKIP, planned.name, planned.reason)
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", Skipped)
+    # `collect_skips`, not `warnings.catch_warnings`: files are checked on a
+    # thread pool and the warnings machinery is process-global, so one file's
+    # skip could be recorded against another -- leaving the check that really
+    # skipped looking like a pass. See `_core.collect_skips`.
+    with collect_skips() as skipped:
         try:
             result = planned.run()
         except SilentFail as exc:
             return Result(FAIL, planned.name, str(exc))
         except ValueError as exc:
             return Result(SKIP, planned.name, str(exc))
-        skipped = [str(w.message) for w in caught if issubclass(w.category, Skipped)]
 
     if result is None and skipped:
         return Result(SKIP, planned.name, skipped[0])
@@ -126,6 +127,27 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
                 None,
                 "no --rubric given; nothing to check the image against",
             )
+        # An image has dimensions, so a size requirement applies to it. Returning
+        # here without a word would discard something the caller asked for, and
+        # the run would go green with the requirement never compared.
+        if args.expect_width or args.expect_height:
+            yield Planned(
+                "format",
+                partial(
+                    assert_format,
+                    path,
+                    width=args.expect_width,
+                    height=args.expect_height,
+                ),
+            )
+        for flag, given in (
+            ("--expect-fps", args.expect_fps),
+            ("--expect-seconds", args.expect_seconds),
+        ):
+            if given:
+                yield Planned(
+                    flag.lstrip("-"), None, f"{flag} does not apply to a still"
+                )
         return
 
     # One probe up front, so a missing audio track is reported once instead of
@@ -418,23 +440,92 @@ def _parse(
     """
     parser = _parser()
     if use_config:
-        # The set of settings that exist, taken from a throwaway parse: argparse
-        # has no public way to enumerate destinations, and knowing them is what
-        # lets a typo'd key in the config be reported rather than ignored.
-        known = set(vars(parser.parse_known_args(["check"])[0]))
-        settings = config.load(known=known)
+        settings = _from_config(parser)
         if settings:
             parser.set_defaults(**settings)
 
     sniffed, _ = parser.parse_known_args(argv)
     if sniffed.preset:
         preset = presets.get(sniffed.preset)
-        parser.set_defaults(
-            target_lufs=preset.target_lufs,
-            loudness_tol=preset.tol,
-            max_true_peak=preset.max_true_peak,
-        )
+        overrides: dict[str, object] = {
+            "target_lufs": preset.target_lufs,
+            "loudness_tol": preset.tol,
+        }
+        # A preset without a stated ceiling leaves the true-peak check off, so
+        # naming the default (`--preset web`) really is the no-op that
+        # `rendercheck presets` says it is. Setting it unconditionally would
+        # make spelling out the default *add* a gate no bare run applies.
+        if preset.max_true_peak is not None:
+            overrides["max_true_peak"] = preset.max_true_peak
+        parser.set_defaults(**overrides)
     return parser.parse_args(argv)
+
+
+def _from_config(parser: argparse.ArgumentParser) -> dict[str, object]:
+    """Settings from the config file, validated the way argparse would have.
+
+    `set_defaults` bypasses every guarantee the flag path gives: no `type=`, no
+    `choices`, no `nargs`. Left alone, `known_names = "Karl"` arrives as a string
+    the speaker check then iterates letter by letter -- a roster of `{k,a,r,l}`
+    that can never match, so the check prints PASS forever. That is precisely
+    the "structurally incapable of firing" failure this CLI already refuses to
+    ship on the flag path.
+    """
+    # argparse has no public way to enumerate actions, so a throwaway parse
+    # yields the destinations and the parser itself yields their types.
+    actions = {a.dest: a for a in parser._actions if a.option_strings}
+    settings = config.load(known=set(actions))
+
+    checked: dict[str, object] = {}
+    for key, value in settings.items():
+        action = actions[key]
+        try:
+            checked[key] = _as_argparse_would(action, value)
+        except (TypeError, ValueError) as exc:
+            print(
+                f"rendercheck: ignoring {key} in the config file -- {exc}",
+                file=sys.stderr,
+            )
+    return checked
+
+
+def _as_argparse_would(action: argparse.Action, value: object) -> object:
+    """Check one config value the way the flag path would, or say why not.
+
+    Raises `TypeError`/`ValueError` with a message naming what was expected.
+    TOML already carries real types, so this validates rather than parses --
+    the failure mode worth guarding is a value of the *wrong shape* arriving
+    somewhere that will use it without complaint.
+    """
+    if isinstance(action, argparse._StoreTrueAction | argparse._StoreFalseAction):
+        if not isinstance(value, bool):
+            raise TypeError(f"expected true or false, got {value!r}")
+        return value
+    if action.nargs in ("+", "*"):
+        if not isinstance(value, list):
+            # The single most damaging case, because a scalar where a list
+            # belongs is still iterable: `known_names = "Karl"` becomes the
+            # roster {k, a, r, l}, which can never match anyone, so the speaker
+            # check prints PASS forever instead of refusing to run.
+            raise TypeError(f"expected a list, got {value!r}")
+        return [str(item) for item in value]
+    if isinstance(value, list | dict):
+        raise TypeError(f"expected a single value, got {value!r}")
+    # `bool` is a subclass of `int`, so it would sail through the number checks
+    # below and arrive as 0 or 1.
+    if action.type is int:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise TypeError(f"expected a whole number, got {value!r}")
+        return int(value)
+    if action.type is float:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise TypeError(f"expected a number, got {value!r}")
+        return float(value)
+    if action.choices is not None and value not in action.choices:
+        raise ValueError(
+            f"{value!r} is not one of: {', '.join(sorted(map(str, action.choices)))}"
+        )
+    return value
 
 
 _COLOURS = {PASS: "\033[32m", FAIL: "\033[31m", SKIP: "\033[33m"}
