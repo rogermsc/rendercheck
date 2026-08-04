@@ -11,6 +11,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 First release. Six assertions for generated media, extracted from a production
 pipeline that renders narrated video at scale.
 
+Briefly published the same day as `silentfail`, renamed before it had users: the
+name collided with an unrelated AI-tooling project and was not the word anyone
+with this problem would search for. The `SilentFail` exception keeps the old
+name — it is still exactly what the exception means.
+
 ### Added
 
 - `assert_pace` — narration speed in words per minute, read from raw text or a
@@ -22,8 +27,8 @@ pipeline that renders narrated video at scale.
 - `assert_speaker` — the script's self-introduction against the presenter
   actually assigned, gated on a roster so story characters don't trip it.
 - `looks_ok` — a rubric-driven vision check for defects only a person can see.
-  Optional extra: `pip install "silentfail[vision]"`.
-- `silentfail check <file>`, with `--json` for calling from another pipeline.
+  Optional extra: `pip install "rendercheck[vision]"`.
+- `rendercheck check <file>`, with `--json` for calling from another pipeline.
 
 ### Notes
 
@@ -35,5 +40,5 @@ pipeline that renders narrated video at scale.
   the file's `(path, mtime, size)` so a re-render is never served a stale
   reading.
 
-[Unreleased]: https://github.com/rogermsc/silentfail/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/rogermsc/silentfail/releases/tag/v0.1.0
+[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.1.0

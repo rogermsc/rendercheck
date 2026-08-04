@@ -1,4 +1,4 @@
-"""silentfail -- assertions for AI-generated media.
+"""rendercheck -- assertions for AI-generated media.
 
 The worst bugs in generated media don't throw. The narration is too fast, the
 voice track is 20 dB quieter than the avatar it's cut against, the segment
@@ -9,7 +9,7 @@ watching the finished output -- the most expensive one available.
 These are plain assert functions. They raise, so they work in pytest, in CI,
 or in a bare script, with nothing to learn:
 
-    from silentfail import assert_pace, assert_loudness, looks_ok
+    from rendercheck import assert_pace, assert_loudness, looks_ok
 
     assert_pace("lesson-1.2.mp4", "lesson-1.2.vtt")
     assert_loudness("lesson-1.2.mp4")

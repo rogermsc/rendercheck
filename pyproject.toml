@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "silentfail"
+name = "rendercheck"
 dynamic = ["version"]
-description = "Assertions for AI-generated media. The bugs don't throw; silentfail makes them throw."
+description = "Assertions for AI-generated media. The bugs don't throw; rendercheck makes them throw."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -43,28 +43,28 @@ dev = [
 ]
 
 [project.scripts]
-silentfail = "silentfail.cli:main"
+rendercheck = "rendercheck.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/rogermsc/silentfail"
-Documentation = "https://github.com/rogermsc/silentfail/blob/main/docs/README.md"
-Changelog = "https://github.com/rogermsc/silentfail/blob/main/CHANGELOG.md"
-Issues = "https://github.com/rogermsc/silentfail/issues"
+Homepage = "https://github.com/rogermsc/rendercheck"
+Documentation = "https://github.com/rogermsc/rendercheck/blob/main/docs/README.md"
+Changelog = "https://github.com/rogermsc/rendercheck/blob/main/CHANGELOG.md"
+Issues = "https://github.com/rogermsc/rendercheck/issues"
 
 [tool.setuptools.dynamic]
-version = { attr = "silentfail.__version__" }
+version = { attr = "rendercheck.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["silentfail*"]
+include = ["rendercheck*"]
 
 [tool.setuptools.package-data]
-silentfail = ["py.typed"]
+rendercheck = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["silentfail"]
+source = ["rendercheck"]
 
 [tool.coverage.report]
 show_missing = true
@@ -80,7 +80,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
-files = ["silentfail", "tests"]
+files = ["rendercheck", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["anthropic", "anthropic.*"]

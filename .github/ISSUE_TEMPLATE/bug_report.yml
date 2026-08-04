@@ -22,7 +22,7 @@ body:
   - type: textarea
     id: output
     attributes:
-      label: Output of `silentfail check <file> --json`
+      label: Output of `rendercheck check <file> --json`
       description: >
         Paste the JSON. If the file is sensitive, redact the path — everything
         else in the report is measurements.
@@ -52,7 +52,7 @@ body:
   - type: input
     id: versions
     attributes:
-      label: silentfail and Python version
-      placeholder: "silentfail 0.1.0, Python 3.12, macOS 15"
+      label: rendercheck and Python version
+      placeholder: "rendercheck 0.1.0, Python 3.12, macOS 15"
     validations:
       required: true

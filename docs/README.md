@@ -79,7 +79,7 @@ gate — worth running the moment a script exists, long before you render.
 
 ## `looks_ok(image, rubric, *, model="claude-opus-5", client=None)`
 
-The only check that needs an API key: `pip install "silentfail[vision]"`.
+The only check that needs an API key: `pip install "rendercheck[vision]"`.
 
 `rubric` is a list of plain-English claims the image must satisfy. Write them as
 falsifiable statements about what is visible, not as goals:
@@ -105,7 +105,7 @@ The rule the whole library runs on:
 
 - **We measured, and it is wrong** → raise. A defect fails closed.
 - **We could not measure** — no ffmpeg, no key, no network, an unreadable file →
-  `warnings.warn(..., silentfail.Skipped)` and pass. The checker fails open, so
+  `warnings.warn(..., rendercheck.Skipped)` and pass. The checker fails open, so
   it never blocks your pipeline on its own breakage.
 - **The file you named does not exist** → `FileNotFoundError`. That is your
   typo, not infrastructure, and silently passing it would defeat the point.
@@ -113,7 +113,7 @@ The rule the whole library runs on:
 Turn skips into failures if you would rather be strict:
 
 ```python
-warnings.simplefilter("error", silentfail.Skipped)
+warnings.simplefilter("error", rendercheck.Skipped)
 ```
 
 ## Performance

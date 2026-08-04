@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/rogermsc/silentfail
-cd silentfail
+git clone https://github.com/rogermsc/rendercheck
+cd rendercheck
 pip install -e ".[dev,vision]"
 ```
 

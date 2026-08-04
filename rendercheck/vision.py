@@ -4,7 +4,7 @@ Everything else in this library is deterministic and free. This is the part
 that needs a key, because "the title overflows and collides with the logo" is
 not measurable with ffprobe.
 
-Requires the optional extra:  pip install "silentfail[vision]"
+Requires the optional extra:  pip install "rendercheck[vision]"
 """
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ def looks_ok(
         # annotation is a contract with mypy, not an unchecked assumption.
         findings: list[dict[str, str]] = json.loads(body)["findings"]
     except ImportError:
-        skip('looks_ok: needs the vision extra -- pip install "silentfail[vision]"')
+        skip('looks_ok: needs the vision extra -- pip install "rendercheck[vision]"')
         return None
     except Exception as exc:
         detail = (

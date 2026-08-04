@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silentfail.cli import main
+from rendercheck.cli import main
 
 # Absolute, not relative: this file must also run as a plain script.
 from tests.test_checks import MINUTE, NOAUDIO, TONE

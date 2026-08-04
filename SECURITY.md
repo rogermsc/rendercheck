@@ -3,7 +3,7 @@
 ## Reporting
 
 Report vulnerabilities through
-[GitHub's private advisory form](https://github.com/rogermsc/silentfail/security/advisories/new).
+[GitHub's private advisory form](https://github.com/rogermsc/rendercheck/security/advisories/new).
 Please don't open a public issue for anything exploitable.
 
 ## What this library does with your data

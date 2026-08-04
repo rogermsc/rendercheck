@@ -48,8 +48,8 @@ jobs:
         run: |
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=4" \
             -af loudnorm=I=-16:TP=-1.5:LRA=11 /tmp/clean.wav
-          silentfail check /tmp/clean.wav --expect-seconds 4
+          rendercheck check /tmp/clean.wav --expect-seconds 4
           # A video with no audio must exit non-zero -- the regression that
           # named this library. `!` so a correct failure passes the step.
           ffmpeg -loglevel error -f lavfi -i "color=c=blue:s=320x240" -t 3 /tmp/noaudio.mp4
-          ! silentfail check /tmp/noaudio.mp4
+          ! rendercheck check /tmp/noaudio.mp4

@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silentfail import (
+from rendercheck import (
     SilentFail,
     Skipped,
     assert_duration,
@@ -25,9 +25,9 @@ from silentfail import (
     assert_pace,
     assert_speaker,
 )
-from silentfail.text import read_script
+from rendercheck.text import read_script
 
-FIXTURES = Path(tempfile.gettempdir()) / "silentfail-fixtures"
+FIXTURES = Path(tempfile.gettempdir()) / "rendercheck-fixtures"
 
 
 def _ffmpeg(*args):
@@ -233,13 +233,13 @@ def _slide():
 
 
 def test_looks_ok_passes_a_clean_image():
-    from silentfail import looks_ok
+    from rendercheck import looks_ok
 
     assert looks_ok(_slide(), ["title fits"], client=_stub_client([])) == []
 
 
 def test_looks_ok_warns_on_minor_but_does_not_raise():
-    from silentfail import looks_ok
+    from rendercheck import looks_ok
 
     minor = [{"severity": "minor", "rubric_item": "title fits", "note": "1px off"}]
     with warnings.catch_warnings(record=True) as caught:
@@ -249,7 +249,7 @@ def test_looks_ok_warns_on_minor_but_does_not_raise():
 
 
 def test_looks_ok_leads_with_the_critical_finding():
-    from silentfail import looks_ok
+    from rendercheck import looks_ok
 
     both = [
         {"severity": "major", "rubric_item": "a", "note": "overflows"},
@@ -260,7 +260,7 @@ def test_looks_ok_leads_with_the_critical_finding():
 
 
 def test_looks_ok_fails_open_on_a_refusal():
-    from silentfail import looks_ok
+    from rendercheck import looks_ok
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -269,7 +269,7 @@ def test_looks_ok_fails_open_on_a_refusal():
 
 
 def test_looks_ok_rejects_an_empty_rubric():
-    from silentfail import looks_ok
+    from rendercheck import looks_ok
 
     try:
         looks_ok(_slide(), [])
@@ -282,7 +282,7 @@ def test_looks_ok_rejects_an_empty_rubric():
 # --- the regression that named the library ----------------------------------
 # v0.1.0 returned PASS for a file with no audio track: silencedetect reports
 # nothing when there is nothing to analyse, and that read as "no silence found".
-# A silent failure inside silentfail. It must never come back.
+# A silent failure inside rendercheck. It must never come back.
 
 
 def test_a_missing_audio_track_is_a_failure_not_a_pass():
@@ -308,7 +308,7 @@ def test_digital_silence_reads_differently_from_a_missing_track():
 
 
 def test_loudness_and_dead_air_share_a_single_decode():
-    from silentfail import _ffmpeg
+    from rendercheck import _ffmpeg
 
     _ffmpeg._measure.cache_clear()
     before = _ffmpeg._measure.cache_info().misses

@@ -1,8 +1,8 @@
-# silentfail
+# rendercheck
 
-[![PyPI](https://img.shields.io/pypi/v/silentfail)](https://pypi.org/project/silentfail/)
-[![CI](https://github.com/rogermsc/silentfail/actions/workflows/ci.yml/badge.svg)](https://github.com/rogermsc/silentfail/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.14-blue)](https://github.com/rogermsc/silentfail)
+[![PyPI](https://img.shields.io/pypi/v/rendercheck)](https://pypi.org/project/rendercheck/)
+[![CI](https://github.com/rogermsc/rendercheck/actions/workflows/ci.yml/badge.svg)](https://github.com/rogermsc/rendercheck/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.14-blue)](https://github.com/rogermsc/rendercheck)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **The worst bugs in generated media don't throw.**
@@ -18,10 +18,10 @@ The 2026 state of the art for catching these is *a person listening to the
 output*. That works, and it costs more than everything else in your pipeline
 combined.
 
-`silentfail` makes them throw.
+`rendercheck` makes them throw.
 
 ```python
-from silentfail import assert_pace, assert_loudness, looks_ok
+from rendercheck import assert_pace, assert_loudness, looks_ok
 
 assert_pace("episode-12.mp3", "episode-12.vtt")
 assert_loudness("episode-12.mp3")
@@ -38,8 +38,8 @@ no network calls** — if you have `ffmpeg`, you're ready.
 ## Quickstart
 
 ```bash
-pip install silentfail
-silentfail check episode-12.mp3 --script episode-12.vtt
+pip install rendercheck
+rendercheck check episode-12.mp3 --script episode-12.vtt
 ```
 
 ```
@@ -148,7 +148,7 @@ looks_ok("slide-14.png", ["the title fits on one line", "no text is clipped"])
 the top-right corner -- failed rubric item: 'the title fits on one line'
 ```
 
-This is the only check that needs a key: `pip install "silentfail[vision]"`.
+This is the only check that needs a key: `pip install "rendercheck[vision]"`.
 
 ---
 
@@ -176,13 +176,13 @@ defect fails closed; the checker fails open. (A missing file is your typo, not
 infrastructure — that still raises.)
 
 **Silence is never mistaken for success.** A check that couldn't run says so, as
-a `silentfail.Skipped` warning and in the CLI output. An empty run never reads
+a `rendercheck.Skipped` warning and in the CLI output. An empty run never reads
 as a clean one.
 
 We had to earn the second one. The first cut of this library returned **PASS**
 for a file with no audio track at all — `silencedetect` reports nothing when
 there is nothing to analyse, and that read as "no silence found". A silent
-failure inside silentfail. It is now the loudest failure in the suite, with a
+failure inside rendercheck. It is now the loudest failure in the suite, with a
 regression test named after it, and the line it taught us is the rule everything
 else follows: *if we measured and it is wrong, fail closed; if we could not
 measure, fail open.*

@@ -1,4 +1,4 @@
-"""`silentfail check <file>` -- run every check that applies to one file.
+"""`rendercheck check <file>` -- run every check that applies to one file.
 
 Dispatches on file type and on which optional inputs you supplied. Checks that
 need something you did not give (a script, an expected duration, a rubric) are
@@ -111,7 +111,7 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="silentfail",
+        prog="rendercheck",
         description="Run every applicable check against one generated media file.",
     )
     parser.add_argument("command", choices=["check"])

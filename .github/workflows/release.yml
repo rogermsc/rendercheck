@@ -15,7 +15,7 @@ jobs:
       - name: Verify tag matches __version__
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          VERSION="$(python -c 'import silentfail; print(silentfail.__version__)')"
+          VERSION="$(python -c 'import rendercheck; print(rendercheck.__version__)')"
           if [ "$TAG" != "$VERSION" ]; then
             echo "tag $TAG does not match __version__ $VERSION" >&2
             exit 1
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/project/silentfail/
+      url: https://test.pypi.org/project/rendercheck/
     permissions:
       id-token: write
     steps:
@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/silentfail/
+      url: https://pypi.org/project/rendercheck/
     permissions:
       id-token: write
     steps:
