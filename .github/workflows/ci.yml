@@ -228,5 +228,17 @@ jobs:
 
           missing = get_assert("/tmp/not-here.wav")
           assert missing["pass"] is False, missing
+
+          # A preset moves the target the eval grades against.
+          loud = get_assert("clean.wav", {"vars": {"preset": "netflix"}})
+          assert loud["pass"] is False, loud
+          assert "-27 target" in loud["reason"], loud
+          assert get_assert("clean.wav")["pass"] is True
+
+          # A preset that does not exist is a graded failure naming the typo,
+          # not an exception that takes the whole eval run down with it.
+          typo = get_assert("clean.wav", {"vars": {"preset": "youtub"}})
+          assert typo["pass"] is False, typo
+          assert "unknown preset" in typo["reason"], typo
           print("promptfoo shim ok")
           PY
