@@ -54,6 +54,21 @@ _CHECK_SCHEMA = {
             "type": "number",
             "description": "How long the render was supposed to be.",
         },
+        "expect_width": {
+            "type": "number",
+            "description": "Picture width the render was asked for, in pixels.",
+        },
+        "expect_height": {
+            "type": "number",
+            "description": "Picture height the render was asked for, in pixels.",
+        },
+        "expect_fps": {
+            "type": "number",
+            "description": (
+                "Frame rate the render was asked for. Also catches variable "
+                "frame rate, a standard cause of audio drifting against picture."
+            ),
+        },
         "preset": {
             "type": "string",
             "enum": sorted(presets.PRESETS),
@@ -101,11 +116,24 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
     CLI's reporting path prints, and on this transport stdout carries the
     protocol. One stray line of human-readable output corrupts the session.
     """
-    from .cli import EXIT_OK, FAIL, SKIP, _expand, _parse, _run, _verdict
+    from .cli import EXIT_OK, FAIL, SKIP, _expand, _parse, _plan, _run, _verdict
 
-    path = Path(str(arguments.get("path", "")))
+    raw = str(arguments.get("path", "")).strip()
+    if not raw:
+        # `Path("")` is the current directory, which exists -- so without this
+        # an argument-less call silently checks whatever the server was started
+        # in and reports on it as though it had been asked to.
+        raise ValueError("check_media needs a path; none was given")
+    path = Path(raw)
     if not path.exists():
         raise FileNotFoundError(f"no such file: {path}")
+
+    # Validated here rather than left to argparse: `choices` failures call
+    # `parser.error()`, which raises SystemExit -- a BaseException that no
+    # `except Exception` catches, so a model guessing a preset name would take
+    # the whole server down instead of getting a correctable message back.
+    if arguments.get("preset"):
+        presets.get(str(arguments["preset"]))
 
     argv = ["check", str(path)]
     for flag, key in (
@@ -114,19 +142,41 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
         ("--preset", "preset"),
     ):
         if arguments.get(key):
-            argv += [flag, str(arguments[key])]
-    if arguments.get("expected_seconds"):
-        argv += ["--expect-seconds", str(arguments["expected_seconds"])]
+            # `--flag=value` rather than two words: a value beginning with `-`
+            # is otherwise read as another flag, and argparse exits on it.
+            argv.append(f"{flag}={arguments[key]}")
+    for flag, key in (
+        ("--expect-seconds", "expected_seconds"),
+        ("--expect-width", "expect_width"),
+        ("--expect-height", "expect_height"),
+        ("--expect-fps", "expect_fps"),
+    ):
+        if arguments.get(key) is not None:
+            number = arguments[key]
+            if not isinstance(number, int | float) or isinstance(number, bool):
+                raise ValueError(f"{key} must be a number, got {number!r}")
+            argv.append(f"{flag}={number}")
     strict = bool(arguments.get("strict"))
     if strict:
         argv.append("--strict")
 
-    from .cli import _plan  # imported here to keep the module import graph flat
+    # A config file in the server's working directory is not this agent's
+    # intent, and it would change verdicts invisibly across sessions.
+    args = _parse(argv, use_config=False)
+    targets = _expand([path])
+    if not targets:
+        # A directory holding no media measured nothing. Reporting that as
+        # `ok: true, clean` tells an agent whose render step wrote no files that
+        # its render is fine -- which is the failure this library is named after,
+        # committed by the surface built for agents.
+        raise ValueError(
+            f"no media files found in {path} -- nothing was measured, so there "
+            f"is no verdict to give"
+        )
 
-    args = _parse(argv)
     files: list[dict[str, Any]] = []
     worst = EXIT_OK
-    for target in _expand([path]):
+    for target in targets:
         results = [_run(planned) for planned in _plan(target, args)]
         worst = max(worst, _verdict(results, strict))
         files.append(
@@ -157,11 +207,38 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _describe() -> dict[str, Any]:
+    from . import media, text, vision
     from .cli import _UNITS
 
+    # Enumerated from the assertions themselves, not from the CLI's unit table:
+    # that table exists to label a measured number, so checks that report no
+    # number (speaker, format, looks ok) were silently absent from a listing
+    # documented as returning every check.
+    checks = {
+        "pace": media.assert_pace,
+        "loudness": media.assert_loudness,
+        "true peak": media.assert_true_peak,
+        "duration": media.assert_duration,
+        "dead air": media.assert_no_dead_air,
+        "truncation": media.assert_no_truncation,
+        "clipping": media.assert_no_clipping,
+        "has sound": media.assert_has_sound,
+        "black frames": media.assert_no_black_frames,
+        "frozen": media.assert_not_frozen,
+        "captions": media.assert_captions_aligned,
+        "streams": media.assert_streams_aligned,
+        "format": media.assert_format,
+        "speaker": text.assert_speaker,
+        "looks ok": vision.looks_ok,
+    }
     return {
         "checks": [
-            {"check": name, "reports": unit} for name, unit in sorted(_UNITS.items())
+            {
+                "check": name,
+                "reports": _UNITS.get(name, "pass or fail only"),
+                "about": (check.__doc__ or "").strip().splitlines()[0],
+            }
+            for name, check in sorted(checks.items())
         ],
         "presets": {
             name: {
@@ -199,10 +276,31 @@ def _call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"unknown tool: {name}")
 
 
-def handle(message: dict[str, Any]) -> dict[str, Any] | None:
-    """One request in, one response out. None for notifications."""
+def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def handle(message: Any) -> dict[str, Any] | None:
+    """One request in, one response out. None for notifications.
+
+    Takes `Any`, not a dict: what arrives is whatever the other end sent. A
+    batch (a list, legal in the older protocol revisions this server accepts) or
+    a bare scalar has to come back as an error, not as an AttributeError that
+    ends the session.
+    """
+    if not isinstance(message, dict):
+        return _error(None, -32600, "expected a single JSON-RPC object")
+
     method = message.get("method")
     request_id = message.get("id")
+    # `"params": null` is valid JSON-RPC and means the same as omitting it.
+    params = message.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
 
     # Notifications carry no id and must never be answered -- a response to one
     # is a protocol error, and some clients drop the connection over it.
@@ -213,7 +311,7 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
     if method == "initialize":
-        asked = str(message.get("params", {}).get("protocolVersion", KNOWN[0]))
+        asked = str(params.get("protocolVersion", KNOWN[0]))
         return reply(
             {
                 "protocolVersion": asked if asked in KNOWN else KNOWN[0],
@@ -224,11 +322,21 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     if method == "tools/list":
         return reply({"tools": TOOLS})
     if method == "tools/call":
-        params = message.get("params", {})
+        arguments = params.get("arguments")
         try:
             return reply(
-                _call(str(params.get("name", "")), params.get("arguments") or {})
+                _call(
+                    str(params.get("name", "")),
+                    arguments if isinstance(arguments, dict) else {},
+                )
             )
+        except SystemExit as exc:
+            # argparse calls sys.exit() on a value it will not accept, and
+            # SystemExit is a BaseException -- `except Exception` sails straight
+            # past it and the process dies mid-session. The arguments came from
+            # a model, so a rejected one has to be a correctable answer.
+            rejected = f"rendercheck rejected those arguments (exit {exc.code})"
+            return reply(_result({"error": rejected}, failed=True))
         except Exception as exc:
             # A tool that failed is a result, not a transport error: the model
             # should see what went wrong and fix its arguments, and a JSON-RPC
@@ -237,11 +345,7 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                 _result({"error": f"{type(exc).__name__}: {exc}"}, failed=True)
             )
 
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": -32601, "message": f"method not found: {method}"},
-    }
+    return _error(request_id, -32601, f"method not found: {method}")
 
 
 def serve(stdin: Any = None, stdout: Any = None) -> int:
@@ -267,7 +371,20 @@ def serve(stdin: Any = None, stdout: Any = None) -> int:
                 file=sys.stderr,
             )
             continue
-        response = handle(message)
+        try:
+            response = handle(message)
+        except BaseException as exc:
+            # Last line of defence. A server that dies mid-session looks to the
+            # client like the tool is broken, with no clue which request did it;
+            # an error response says so and the session carries on. BaseException
+            # rather than Exception because SystemExit is the realistic one here.
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            response = _error(
+                message.get("id") if isinstance(message, dict) else None,
+                -32603,
+                f"internal error: {type(exc).__name__}: {exc}",
+            )
         if response is not None:
             sink.write(json.dumps(response) + "\n")
             sink.flush()

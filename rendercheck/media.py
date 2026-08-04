@@ -379,17 +379,21 @@ def assert_streams_aligned(
                 f"and cue timed against it inherits the same offset"
             )
 
-    gap = audio.length - video.length
+    # A stream ends at start + duration, not at duration. Comparing lengths
+    # alone reports a match for a file where one stream is offset and genuinely
+    # runs past the other -- and the wider you set max_start_skew to tolerate a
+    # known pre-roll, the more of the ending check you silently lose.
+    audio_end = (audio.start or 0.0) + audio.length
+    video_end = (video.start or 0.0) + video.length
+    gap = audio_end - video_end
     if abs(gap) > max_gap:
-        short, length = (
-            ("sound", audio.length) if gap < 0 else ("picture", video.length)
-        )
+        short, ends = ("sound", audio_end) if gap < 0 else ("picture", video_end)
         raise SilentFail(
-            f"{media} runs {video.length:.1f}s of picture against "
-            f"{audio.length:.1f}s of sound -- {short} stops {abs(gap):.1f}s "
+            f"{media} runs {video_end:.1f}s of picture against "
+            f"{audio_end:.1f}s of sound -- {short} stops {abs(gap):.1f}s "
             f"early (limit {max_gap:g}s). A mux that ran out of one input "
             f"produces exactly this: a valid file, correct overall length, and "
-            f"{length:.1f}s in, nothing there"
+            f"{ends:.1f}s in, nothing there"
         )
     return gap
 
@@ -422,7 +426,13 @@ def assert_format(
         skip(f"format: {media} has no video stream")
         return
 
-    if (width or height) and video.width and video.height:
+    if width or height:
+        # Skip, not pass. A requested size that nothing was compared against is
+        # "could not measure" -- and returning silently here is the one place in
+        # this file where that would have read as "measured and fine".
+        if not video.width or not video.height:
+            skip(f"format: {media} declares no picture dimensions")
+            return
         want = (width or video.width, height or video.height)
         if (video.width, video.height) != want:
             raise SilentFail(
@@ -498,7 +508,31 @@ def assert_captions_aligned(
         skip(f"captions: {exc}")
         return None
 
-    fit = _captions.align(cues, silences, length, max_shift=max(5.0, max_offset * 4))
+    # Search comfortably wider than the limit being enforced, so an offset just
+    # over the line is measured rather than found at the edge and reported as
+    # unknown.
+    max_shift = max(5.0, max_offset * 4)
+
+    # Cues outside the media are their own defect, and they have to be caught
+    # before the fit rather than after it: the binning clamps anything out of
+    # range to the first or last bin, so a caption file for a different cut
+    # piles up at one end and produces a confident, small, wrong offset.
+    #
+    # Measured against the search range, not against the tolerance. Captions
+    # that are merely late overhang the end by exactly how late they are, and
+    # that is the case this check is *for* -- only an overhang bigger than any
+    # offset the fit could explain means a different cut. Only the tail is
+    # tested: no caption format can express a time before zero, so cues cannot
+    # start early enough to fall off the front.
+    overhang = max(e for _, e in cues) - length
+    if overhang > max_shift:
+        raise SilentFail(
+            f"{captions} describes {overhang:.1f}s of {media} that does not "
+            f"exist -- its cues run past the end of the file, further than any "
+            f"offset could account for. These are captions for a different cut "
+            f"of this material, not a mistimed copy of this one"
+        )
+    fit = _captions.align(cues, silences, length, max_shift=max_shift)
     if fit is None:
         skip(f"captions: nothing to align in {media}")
         return None
@@ -512,6 +546,18 @@ def assert_captions_aligned(
             f"continuous speech and music beds give nothing to match against"
         )
         return None
+
+    if fit.saturated:
+        # The best fit sat at the edge of the search range, so the captions are
+        # at least that far out and possibly much further -- or they belong to
+        # another file. Quoting the edge value would state a number nobody
+        # measured, and the drift arithmetic built on it would be worse.
+        raise SilentFail(
+            f"{captions} is more than {max_shift:g}s away from the speech in "
+            f"{media} -- far enough that the search ran out of room, so the "
+            f"real offset is unknown. Either these captions were timed against "
+            f"a different cut, or they are not the captions for this file"
+        )
 
     # Drift is reported ahead of offset because it is the more specific finding
     # and the more expensive one to act on: a constant offset is one shift away

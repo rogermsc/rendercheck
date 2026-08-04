@@ -115,7 +115,9 @@ appears on the platform's copy, not on yours.
 
 Read from the same decode as loudness, so it is free once that has run. Off by
 default on the command line — there is no universal ceiling — and switched on by
-`--preset` or `--max-true-peak`.
+`--max-true-peak`, or by any preset that states one. `--preset web` does not:
+it exists to name the built-in defaults, so it has to behave exactly like
+passing no preset at all.
 
 ## `assert_streams_aligned(media, *, max_gap=0.5, max_start_skew=0.25)`
 
@@ -128,6 +130,12 @@ A **container** check, not a perceptual one. It reads what the file declares
 about its own streams, in a single `ffprobe` call with no decoding, which makes
 it the cheapest thing here. It cannot see lip sync; what it can see is the much
 more common case where nothing lines up because the timings never did.
+
+A stream ends at `start + duration`, and the gap is measured between those
+endings rather than between the two durations. It matters when the streams are
+offset: comparing lengths alone reports a match for a file whose sound genuinely
+runs past its picture, and widening `max_start_skew` to tolerate a known
+pre-roll would then throw the ending check away without saying so.
 
 Skips when the file has only one of the two, or when the container declares no
 per-stream duration — Matroska usually does not. Comparing against a number
@@ -167,6 +175,20 @@ the symptom and bury the cause.
 no silence structure to match against, so every shift scores identically — and a
 naive implementation would read a confident zero offset off that flat curve and
 pass. `SKIP` here means "could not tell", never "fine".
+
+**It refuses to quote a number it did not measure.** Three cases, all of which
+produced confident wrong answers before 0.3.1:
+
+- A best fit sitting at the *edge* of the search range means the real offset is
+  somewhere past it. Reported as "more than Ns away", not as the edge value.
+- Drift is only reported when both the head and the tail window contain cues and
+  neither fit saturated. A window with no cues scores zero at every shift, so
+  the "best" one is whatever the tie-break picked — and the silence almost every
+  file ends on produced exactly that, inventing drift on correct captions.
+- Cues running past the end of the media by more than the search range are
+  captions for a **different cut**, not a mistimed copy of this one, and are
+  named as such. Left alone they clamp into the last bin and yield a small,
+  plausible, wrong offset.
 
 Returns the measured offset in seconds; positive means the captions run late.
 
@@ -224,6 +246,23 @@ Turn skips into failures if you would rather be strict:
 warnings.simplefilter("error", rendercheck.Skipped)
 ```
 
+Or collect them, which is what the runner does — and what any caller wants who
+needs to know that a green result actually measured something:
+
+```python
+from rendercheck import collect_skips
+
+with collect_skips() as skipped:
+    assert_loudness("lesson.mp4")
+    assert_no_dead_air("lesson.mp4")
+
+if skipped:
+    print("could not measure:", *skipped, sep="\n  ")
+```
+
+Per-thread, unlike `warnings.catch_warnings`, which is process-global and
+documented as unsafe under threads.
+
 ```bash
 rendercheck check lesson.mp4 --strict
 ```
@@ -277,7 +316,11 @@ max_caption_offset = 0.5
 Keys are the long-flag names with `--` dropped; hyphens and underscores both
 work. **A key that does not exist is reported on stderr, not ignored** — a
 typo'd threshold that silently does nothing is exactly the class of bug this
-library exists to catch.
+library exists to catch. So is a key of the wrong *shape*: config values are
+checked the way argparse checks a flag, because `known_names = "Karl"` is
+natural TOML for a one-name roster and, unchecked, becomes the roster
+`{k, a, r, l}` — which can never match anyone, so the speaker check prints
+`PASS` forever. Positionals cannot be set from the file at all.
 
 Precedence, loosest to tightest: built-in defaults, the config file, `--preset`,
 then flags you actually typed. Reading the config needs Python 3.11 (`tomllib`);

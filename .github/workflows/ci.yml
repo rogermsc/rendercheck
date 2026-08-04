@@ -240,5 +240,37 @@ jobs:
           typo = get_assert("clean.wav", {"vars": {"preset": "youtub"}})
           assert typo["pass"] is False, typo
           assert "unknown preset" in typo["reason"], typo
+
+          # A `script` var pointing at nothing is the test's own mistake and
+          # should fail that test, not abort every other one.
+          bad_var = get_assert("clean.wav", {"vars": {"script": "no-such.vtt"}})
+          assert bad_var["pass"] is False, bad_var
           print("promptfoo shim ok")
+          PY
+
+      # Without ffmpeg every check skips, nothing raises, and an eval that
+      # measured nothing used to go green -- the failure this library is named
+      # after, committed by the surface that grades other people's output.
+      - name: The promptfoo assertion fails when nothing could be measured
+        run: |
+          python - <<'PY'
+          import os, shutil, subprocess, sys, tempfile, textwrap
+
+          # An empty directory, not a hand-picked one: apt drops ffmpeg into
+          # /usr/bin, so "/usr/bin:/bin" still has it and this test would assert
+          # nothing. Python is launched by absolute path, so an empty PATH is
+          # fine for everything except the lookup under test.
+          bare = tempfile.mkdtemp()
+          assert shutil.which("ffmpeg", path=bare) is None, "need a PATH without ffmpeg"
+          script = textwrap.dedent("""
+              import sys
+              sys.path.insert(0, "examples/promptfoo")
+              from rendercheck_assert import get_assert
+              graded = get_assert("clean.wav")
+              assert graded["pass"] is False, graded
+              assert "nothing could be measured" in graded["reason"], graded
+              print("no-ffmpeg grading ok")
+          """)
+          env = dict(os.environ, PATH=bare)
+          sys.exit(subprocess.run([sys.executable, "-c", script], env=env).returncode)
           PY

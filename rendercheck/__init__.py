@@ -20,7 +20,7 @@ Every check fails *open* on infrastructure trouble -- if it cannot measure, it
 warns and passes rather than blocking your pipeline on its own breakage.
 """
 
-from ._core import SilentFail, Skipped
+from ._core import SilentFail, Skipped, collect_skips
 from .media import (
     assert_captions_aligned,
     assert_duration,
@@ -40,7 +40,7 @@ from .presets import PRESETS, Preset
 from .text import assert_speaker
 from .vision import looks_ok
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "PRESETS",
@@ -61,5 +61,6 @@ __all__ = [
     "assert_speaker",
     "assert_streams_aligned",
     "assert_true_peak",
+    "collect_skips",
     "looks_ok",
 ]

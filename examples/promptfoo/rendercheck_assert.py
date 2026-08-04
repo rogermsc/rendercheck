@@ -31,6 +31,7 @@ from rendercheck import (
     assert_no_truncation,
     assert_pace,
     assert_true_peak,
+    collect_skips,
 )
 from rendercheck.presets import get as preset
 from rendercheck.text import find_captions
@@ -61,25 +62,60 @@ def get_assert(output: str, context: dict[str, Any] | None = None) -> dict[str, 
     script = variables.get("script")
     captions = variables.get("captions") or find_captions(path)
 
+    ran = 0
     try:
-        # Inside the try on purpose: a test naming a preset that does not exist
-        # must be graded as a failure with the reason, not blow up the eval run.
-        target = preset(str(variables.get("preset") or PRESET))
-        assert_has_sound(path)
-        assert_loudness(path, target_lufs=target.target_lufs, tol=target.tol)
-        assert_true_peak(path, max_dbtp=target.max_true_peak)
-        assert_no_dead_air(path)
-        assert_no_truncation(path)
-        assert_no_clipping(path)
-        if script:
-            assert_pace(path, script)
-        if captions:
-            assert_captions_aligned(path, captions)
+        # Inside the try on purpose: a test naming a preset that does not exist,
+        # or a `script` var pointing at a file that is not there, must be graded
+        # as a failure with the reason rather than blow up the whole eval run.
+        with collect_skips() as skipped:
+            target = preset(str(variables.get("preset") or PRESET))
+            checks = [
+                lambda: assert_has_sound(path),
+                lambda: assert_loudness(
+                    path, target_lufs=target.target_lufs, tol=target.tol
+                ),
+                lambda: assert_no_dead_air(path),
+                lambda: assert_no_truncation(path),
+                lambda: assert_no_clipping(path),
+            ]
+            if target.max_true_peak is not None:
+                checks.append(
+                    lambda: assert_true_peak(path, max_dbtp=target.max_true_peak)
+                )
+            if script:
+                checks.append(lambda: assert_pace(path, script))
+            if captions:
+                checks.append(lambda: assert_captions_aligned(path, captions))
+            ran = len(checks)
+            for check in checks:
+                check()
     except SilentFail as exc:
         return {"pass": False, "score": 0, "reason": str(exc)}
-    except ValueError as exc:
-        # An unknown preset name, most likely. A test that names one that does
-        # not exist should say so rather than quietly grade against the default.
+    except (ValueError, OSError) as exc:
+        # OSError covers FileNotFoundError from a `script` or `captions` var
+        # naming something that is not there -- a test's own mistake, which
+        # should fail that test rather than abort every other one.
         return {"pass": False, "score": 0, "reason": str(exc)}
 
-    return {"pass": True, "score": 1, "reason": "rendercheck found no defects"}
+    # The check that makes this assertion worth anything. Without ffmpeg every
+    # check above skips, nothing raises, and the eval goes green having measured
+    # nothing -- which is precisely the failure rendercheck exists to catch, so
+    # it would be absurd to commit it here.
+    if len(skipped) >= ran:
+        return {
+            "pass": False,
+            "score": 0,
+            "reason": (
+                f"nothing could be measured about {path} -- all {ran} checks "
+                f"skipped, so this is not a clean result. First reason: "
+                f"{skipped[0] if skipped else 'unknown'}"
+            ),
+        }
+
+    measured = ran - len(skipped)
+    note = f" ({len(skipped)} skipped)" if skipped else ""
+    return {
+        "pass": True,
+        "score": 1,
+        "reason": f"rendercheck measured {measured} checks and found no defects{note}",
+    }

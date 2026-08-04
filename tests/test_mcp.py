@@ -20,8 +20,12 @@ from rendercheck.mcp import KNOWN, TOOLS, handle, serve
 from tests.test_checks import NOAUDIO, TONE
 
 
-def session(*messages: dict[str, Any]) -> list[dict[str, Any]]:
-    """Run a whole conversation through the server and parse what came back."""
+def session(*messages: Any) -> list[dict[str, Any]]:
+    """Run a whole conversation through the server and parse what came back.
+
+    `Any`, not `dict`: some of these tests deliberately send a batch or a bare
+    scalar, because that is what a real client will eventually do.
+    """
     out = io.StringIO()
     serve(io.StringIO("\n".join(json.dumps(m) for m in messages) + "\n"), out)
     # json.loads on every line, not just the interesting ones: a print() that
@@ -144,6 +148,89 @@ def test_list_checks_describes_the_presets_it_accepts():
     schema: Any = TOOLS[0]["inputSchema"]
     accepted = schema["properties"]["preset"]["enum"]
     assert set(body["presets"]) == set(accepted), body["presets"]
+
+
+# --- the crashes found by review --------------------------------------------
+#
+# Every one of these killed the process mid-session. To a client that looks
+# identical to a broken tool, with no indication which request did it.
+
+
+def test_a_null_params_does_not_kill_the_session():
+    # `"params": null` is valid JSON-RPC and means the same as omitting it.
+    replies = session(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": None},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    )
+    assert len(replies) == 2, replies
+    assert replies[0]["result"]["protocolVersion"] in KNOWN, replies[0]
+
+
+def test_a_batch_is_an_error_rather_than_an_attribute_error():
+    # Batches are legal in the older revisions this server advertises, so one
+    # will arrive eventually. It must be refused, not crashed on.
+    replies = session([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])
+    assert replies[0]["error"]["code"] == -32600, replies
+
+
+def test_a_scalar_message_is_an_error_rather_than_an_attribute_error():
+    assert session("hello")[0]["error"]["code"] == -32600
+
+
+def test_a_rejected_argument_does_not_take_the_server_down_with_it():
+    # argparse calls sys.exit() on a value it will not accept, and SystemExit is
+    # a BaseException that `except Exception` sails straight past. The arguments
+    # come from a model, so a rejected one has to be a correctable answer.
+    for arguments in (
+        {"path": str(TONE), "preset": "youtub"},
+        {"path": str(TONE), "expected_seconds": "about twelve"},
+    ):
+        replies = session(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "check_media", "arguments": arguments},
+            },
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+        assert replies[0]["result"]["isError"] is True, replies[0]
+        assert len(replies) == 2, f"session died on {arguments}: {replies}"
+
+
+def test_an_empty_directory_is_not_reported_as_clean():
+    # THE one that matters on this surface: an agent whose render step wrote no
+    # files was told its render was fine.
+    empty = Path(TONE).parent / "nothing-here"
+    empty.mkdir(exist_ok=True)
+    result = call("check_media", path=str(empty))
+    assert result["isError"] is True, result
+    assert "nothing was measured" in result["structuredContent"]["error"], result
+
+
+def test_an_absent_path_argument_does_not_silently_check_the_cwd():
+    # `Path("")` is the current directory, which exists.
+    result = call("check_media")
+    assert result["isError"] is True, result
+    assert "needs a path" in result["structuredContent"]["error"], result
+
+
+def test_the_schema_offers_every_argument_the_checks_can_use():
+    # assert_format shipped with no way to reach it from here, so the check
+    # could never fire over MCP however the model was prompted.
+    schema: Any = TOOLS[0]["inputSchema"]
+    offered = set(schema["properties"])
+    assert {"expect_width", "expect_height", "expect_fps"} <= offered, offered
+
+
+def test_list_checks_names_every_check_not_just_the_ones_reporting_a_number():
+    # It enumerated the CLI's unit table, which exists to label a measurement --
+    # so speaker, format and looks ok were missing from a listing documented as
+    # returning every check.
+    named = {
+        check["check"] for check in call("list_checks")["structuredContent"]["checks"]
+    }
+    assert {"speaker", "format", "looks ok", "captions", "streams"} <= named, named
 
 
 def test_the_server_runs_as_a_subprocess_with_clean_stdout():

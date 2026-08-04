@@ -84,7 +84,7 @@ Levels that don't match
   PASS  clipping    0 samples at 0 dBFS
 ```
 
-…and the last two, which are new in 0.3.0:
+…and one of the two added in 0.3.0:
 
 ```
 Captions against the wrong clock
@@ -120,23 +120,24 @@ turns that table into something a build can enforce:
 ```
 $ rendercheck presets
 
-  preset     target    tol     peak  source
-  youtube      -14L   1.0dB  -1.0TP  YouTube normalises playback to -14 LUFS
-  spotify      -14L   1.0dB  -1.0TP  Spotify, including podcasts, at -14 LUFS
-  tiktok       -14L   1.5dB  -1.0TP  TikTok and Instagram, measured rather than published
-  podcast      -16L   1.0dB  -1.0TP  AES71 / Apple Podcasts: -16 LUFS stereo, -19 mono
-  apple        -16L   1.0dB  -1.0TP  Apple Music Sound Check, -16 LUFS
-  web          -16L   2.0dB  -1.0TP  spoken-word web video -- rendercheck's default target
-  ebu          -23L   1.0dB  -1.0TP  EBU R128, European broadcast
-  atsc         -24L   2.0dB  -2.0TP  ATSC A/85, North American broadcast
-  netflix      -27L   2.0dB  -2.0TP  Netflix delivery, dialog-gated
+  preset    target     tol     peak  source
+  youtube     -14L   1.0dB   -1.0TP  YouTube normalises playback to -14 LUFS
+  spotify     -14L   1.0dB   -1.0TP  Spotify, including podcasts, at -14 LUFS
+  tiktok      -14L   1.5dB   -1.0TP  TikTok and Instagram, measured rather than published
+  podcast     -16L   1.0dB   -1.0TP  AES71 / Apple Podcasts: -16 LUFS stereo, -19 mono
+  apple       -16L   1.0dB   -1.0TP  Apple Music Sound Check, -16 LUFS
+  web         -16L   2.0dB       --  spoken-word web video -- rendercheck's own defaults
+  ebu         -23L   1.0dB   -1.0TP  EBU R128, European broadcast
+  atsc        -24L   2.0dB   -2.0TP  ATSC A/85, North American broadcast
+  netflix     -27L   2.0dB   -2.0TP  Netflix delivery, dialog-gated
 ```
 
 None of those numbers are ours. The contribution is that `--preset ebu` is a
 decision a reviewer can read, where `--target-lufs -23` is a magic number the
-next person will not dare touch. A preset also switches on the **true-peak**
-check, which is the one that catches a master measuring clean locally and
-distorting after upload.
+next person will not dare touch. A preset that states a ceiling also switches on
+the **true-peak** check, which catches a master measuring clean locally and
+distorting after upload. `web` exists only to *name* the built-in defaults, so
+it states none and behaves exactly like passing no preset at all.
 
 Project-wide settings go in `rendercheck.toml` (or `[tool.rendercheck]` in
 `pyproject.toml`) so a CI step is not eight flags on one line:

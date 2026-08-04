@@ -14,12 +14,16 @@ whatever flags were actually typed. A flag someone typed always wins.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 FILENAME = "rendercheck.toml"
 SECTION = "pyproject.toml"
+
+# A real section header starts its line. See `find`.
+_SECTION_HEADER = re.compile(r"^[ \t]*\[tool\.rendercheck", re.MULTILINE)
 
 HAVE_TOML = sys.version_info >= (3, 11)
 """Whether this interpreter can read the config file.
@@ -46,12 +50,17 @@ def find(start: Path | None = None) -> Path | None:
         project = directory / SECTION
         # A pyproject.toml with no section of ours is not our config file, and
         # stopping at one would hide a real config further up -- a package
-        # directory inside a repo is an ordinary layout. Tested as text rather
+        # directory inside a repo is an ordinary layout.
+        #
+        # Matched against the start of a line rather than anywhere in the text,
+        # so a file that merely *mentions* the section -- in a comment, a
+        # dependency description, this project's own docs -- does not halt the
+        # search and silently drop the real config above it. Read as text rather
         # than parsed because this decision has to work on 3.10 too, where there
         # is no TOML parser; the real read happens in `load`.
         if project.is_file():
             try:
-                if "[tool.rendercheck]" in project.read_text(encoding="utf-8"):
+                if _SECTION_HEADER.search(project.read_text(encoding="utf-8")):
                     return project
             except OSError:
                 pass

@@ -31,8 +31,12 @@ class Preset(NamedTuple):
     tol: float
     """How far either side still lands acceptably."""
 
-    max_true_peak: float
-    """Ceiling in dBTP, below 0 to leave the codec room to reconstruct."""
+    max_true_peak: float | None
+    """Ceiling in dBTP, below 0 to leave the codec room to reconstruct.
+
+    None where the platform states no ceiling -- which leaves the true-peak
+    check switched off, exactly as a run with no preset at all leaves it.
+    """
 
     note: str
     """What this row is for, and where the number comes from."""
@@ -52,8 +56,11 @@ PRESETS: dict[str, Preset] = {
         -16.0, 1.0, -1.0, "AES71 / Apple Podcasts: -16 LUFS stereo, -19 mono"
     ),
     "apple": Preset(-16.0, 1.0, -1.0, "Apple Music Sound Check, -16 LUFS"),
+    # No peak ceiling: `web` exists to *name* the built-in defaults, so it has
+    # to behave exactly like passing no preset at all. Giving it a ceiling would
+    # make spelling out the default fail files that a bare run passes.
     "web": Preset(
-        -16.0, 2.0, -1.0, "spoken-word web video -- rendercheck's default target"
+        -16.0, 2.0, None, "spoken-word web video -- rendercheck's own defaults"
     ),
     "ebu": Preset(-23.0, 1.0, -1.0, "EBU R128, European broadcast"),
     "atsc": Preset(-24.0, 2.0, -2.0, "ATSC A/85, North American broadcast"),
@@ -83,8 +90,13 @@ def table() -> str:
     width = max(len(name) for name in PRESETS)
     lines = [f"  {'preset':<{width}}  {'target':>7}  {'tol':>6}  {'peak':>7}  source"]
     for name, preset in PRESETS.items():
+        peak = (
+            f"{preset.max_true_peak:>5.1f}TP"
+            if preset.max_true_peak is not None
+            else f"{'--':>7}"
+        )
         lines.append(
             f"  {name:<{width}}  {preset.target_lufs:>6.0f}L  "
-            f"{preset.tol:>4.1f}dB  {preset.max_true_peak:>5.1f}TP  {preset.note}"
+            f"{preset.tol:>4.1f}dB  {peak}  {preset.note}"
         )
     return "\n".join(lines)
