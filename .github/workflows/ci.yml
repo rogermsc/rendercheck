@@ -153,10 +153,15 @@ jobs:
           # The shim shadows the real CLI: the wrapper must look past it.
           PATH="$SHIM:$PATH" timeout 60 node npm/bin/rendercheck.js --version
 
-          # And with no real CLI anywhere, it must say so instead of spinning.
-          BARE="/usr/bin:/bin:$(dirname "$(command -v node)")"
-          PATH="$SHIM:$BARE" timeout 60 node npm/bin/rendercheck.js --version \
+          # The backstop, for a shim the path heuristics cannot recognise: being
+          # re-entered means we resolved to ourselves, so it must bail with an
+          # actionable message rather than delegate again. Asserted directly
+          # because PATH cannot be relied on to lack uvx and pipx -- a runner
+          # that has them will (correctly) succeed through that fallback.
+          timeout 60 env RENDERCHECK_NODE_WRAPPER=1 node npm/bin/rendercheck.js --version \
             && { echo "expected a non-zero exit"; exit 1; } || test $? -eq 2
+          env RENDERCHECK_NODE_WRAPPER=1 node npm/bin/rendercheck.js --version 2>&1 \
+            | grep -q "resolved to itself"
 
       - name: The promptfoo assertion grades a real file
         run: |
