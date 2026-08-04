@@ -254,9 +254,13 @@ jobs:
       - name: The promptfoo assertion fails when nothing could be measured
         run: |
           python - <<'PY'
-          import os, shutil, subprocess, sys, textwrap
+          import os, shutil, subprocess, sys, tempfile, textwrap
 
-          bare = "/usr/bin:/bin"
+          # An empty directory, not a hand-picked one: apt drops ffmpeg into
+          # /usr/bin, so "/usr/bin:/bin" still has it and this test would assert
+          # nothing. Python is launched by absolute path, so an empty PATH is
+          # fine for everything except the lookup under test.
+          bare = tempfile.mkdtemp()
           assert shutil.which("ffmpeg", path=bare) is None, "need a PATH without ffmpeg"
           script = textwrap.dedent("""
               import sys
