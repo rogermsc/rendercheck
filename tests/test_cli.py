@@ -145,6 +145,27 @@ def test_a_typod_script_path_is_a_usage_error():
     assert "no such script file" in out, out
 
 
+def test_demo_fires_real_checks_on_media_it_generates():
+    # The demo is the answer to "I cannot try this without a broken file". If it
+    # ever prints something that is not a genuine measurement, it is worse than
+    # having no demo at all.
+    buffer = io.StringIO()
+    with redirect_stdout(buffer), redirect_stderr(buffer):
+        code = main(["demo"])
+    out = buffer.getvalue()
+    assert code == 0, out
+    assert "300 WPM exceeds 245" in out, out
+    assert "has no audio stream at all" in out, out
+    assert out.count("FAIL") >= 5, out
+
+
+def test_demo_leaves_the_working_directory_where_it_found_it():
+    before = Path.cwd()
+    with redirect_stdout(io.StringIO()):
+        main(["demo"])
+    assert Path.cwd() == before
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

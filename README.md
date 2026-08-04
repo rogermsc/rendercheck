@@ -37,17 +37,42 @@ no network calls** — if you have `ffmpeg`, you're ready.
 
 ## Quickstart
 
+You need `ffmpeg` on your PATH (`brew install ffmpeg`, `apt-get install ffmpeg`,
+or `winget install ffmpeg`). Then:
+
 ```bash
 pip install rendercheck
+rendercheck demo
+```
+
+`demo` synthesises five defective files and runs the real checks against them,
+so you can see it fire without owning a broken render. Verbatim, first two of
+five:
+
+```
+Narration too fast
+  A voice picked to match a presenter's face read English at machine-gun speed.
+
+  $ rendercheck check machine-gun.wav --script narration.vtt
+
+  FAIL  pace      narration pace 300 WPM exceeds 245 (300 words in 60.0s) -- this reads as machine-gun delivery and listeners cannot follow it: machine-gun.wav
+  PASS  loudness  -16.1 LUFS
+  PASS  dead air  0.0 s silence
+
+Levels that don't match
+  Synthesised narration landed 18 dB under the footage it was cut against.
+
+  $ rendercheck check too-quiet.wav
+
+  SKIP  pace      no --script given
+  FAIL  loudness  -34.0 LUFS is 18.0 dB quieter than the -16 target -- it will sound inaudible next to correctly-levelled audio cut alongside it: too-quiet.wav
+  PASS  dead air  0.0 s silence
+```
+
+Then point it at your own output:
+
+```bash
 rendercheck check episode-12.mp3 --script episode-12.vtt
-```
-
-```
-  FAIL  pace      narration pace 300 WPM exceeds 245 (300 words in 60.0s) -- …
-  PASS  loudness  -16.0 LUFS
-  FAIL  dead air  6.2s of silence starting at 0:41 exceeds the 3s limit -- …
-
-  1 passed, 2 failed, 0 skipped
 ```
 
 Exit code is 1 if anything failed — **or if nothing could be measured**, because

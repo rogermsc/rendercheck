@@ -29,6 +29,9 @@ name — it is still exactly what the exception means.
 - `looks_ok` — a rubric-driven vision check for defects only a person can see.
   Optional extra: `pip install "rendercheck[vision]"`.
 - `rendercheck check <file>`, with `--json` for calling from another pipeline.
+- `rendercheck demo` — synthesises five defective files with ffmpeg and runs the
+  real checks against them. Every check here only fires on *broken* media, so
+  trying the library used to require already owning a broken render.
 
 ### Fixed — seven silent failures found inside the checker itself
 

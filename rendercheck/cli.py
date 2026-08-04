@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import warnings
 from collections.abc import Callable, Iterator, Sequence
@@ -16,7 +17,7 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
-from . import __version__
+from . import __version__, demo
 from ._core import SilentFail, Skipped
 from .media import assert_duration, assert_loudness, assert_no_dead_air, assert_pace
 from .text import assert_speaker
@@ -151,8 +152,17 @@ def _parser() -> argparse.ArgumentParser:
         prog="rendercheck",
         description="Run every applicable check against one generated media file.",
     )
-    parser.add_argument("command", choices=["check"], help="what to do")
-    parser.add_argument("file", type=Path, help="the generated media file to check")
+    parser.add_argument(
+        "command",
+        choices=["check", "demo"],
+        help="check a file, or demo the checks on media generated for the purpose",
+    )
+    parser.add_argument(
+        "file",
+        type=Path,
+        nargs="?",
+        help="the generated media file to check",
+    )
     parser.add_argument(
         "--version", action="version", version=f"rendercheck {__version__}"
     )
@@ -220,8 +230,63 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_report(results: list[Result]) -> None:
+    width = max(len(r.name) for r in results)
+    for status, name, detail in results:
+        print(f"  {status}  {name:<{width}}  {detail}")
+
+
+def _demo() -> int:
+    """Run the real checks against media generated for the purpose."""
+    try:
+        cases = demo.build()
+    except FileNotFoundError:
+        print(
+            "rendercheck: the demo needs ffmpeg on PATH to generate its files.\n"
+            "  macOS   brew install ffmpeg\n"
+            "  Debian  sudo apt-get install ffmpeg\n"
+            "  Windows winget install ffmpeg",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    bold, plain = ("\033[1m", "\033[0m") if sys.stdout.isatty() else ("", "")
+    root = demo.directory()
+    print(f"Generated five defective files in {root}\n")
+
+    # Run from inside that directory so the failure messages name the file the
+    # way the printed command does. An absolute temp path in every line buries
+    # the part that matters.
+    previous = Path.cwd()
+    os.chdir(root)
+    try:
+        for case in cases:
+            argv = ["check", case.path.name, *case.args]
+            args = _parser().parse_args(argv)
+            print(f"{bold}{case.title}{plain}")
+            print(f"  {case.story}")
+            print(f"\n  $ rendercheck {' '.join(argv)}\n")
+            _print_report(
+                [_run(planned) for planned in _plan(Path(case.path.name), args)]
+            )
+            print()
+    finally:
+        os.chdir(previous)
+
+    print(
+        "Every line above is a real measurement of a real file -- nothing here\n"
+        "is sample output. Point it at your own renders the same way."
+    )
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "demo":
+        return _demo()
+    if args.file is None:
+        print("rendercheck: check needs a file to check", file=sys.stderr)
+        return EXIT_USAGE
     if not args.file.exists():
         print(f"rendercheck: no such file: {args.file}", file=sys.stderr)
         return EXIT_USAGE
@@ -253,9 +318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
     else:
-        width = max(len(r.name) for r in results)
-        for status, name, detail in results:
-            print(f"  {status}  {name:<{width}}  {detail}")
+        _print_report(results)
         print(f"\n{passed} passed, {failures} failed, {skips} skipped")
         if not passed:
             print("nothing could be measured -- this is not a clean run")
