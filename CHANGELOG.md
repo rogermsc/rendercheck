@@ -30,6 +30,32 @@ name — it is still exactly what the exception means.
   Optional extra: `pip install "rendercheck[vision]"`.
 - `rendercheck check <file>`, with `--json` for calling from another pipeline.
 
+### Fixed — seven silent failures found inside the checker itself
+
+Audited before the first release under this name. Every one of these made the
+tool report success without having established it:
+
+- The CLI exited `0` when **every** check skipped. A run that measured nothing
+  was green in CI. It now exits `1`, with or without `--strict`.
+- A **typo'd media path** exited `0`: `FileNotFoundError` was caught and
+  downgraded to a skip, contradicting the documented promise. Now exit `2`.
+- A **typo'd `--script` path** was read as narration text — one word — and
+  produced a confident, wrong verdict about the *audio* (`1 WPM is below 110`).
+  A path-shaped string ending in a transcript extension now raises.
+- `--presenter` without `--known-names` defaulted the roster to the assigned
+  presenter, which made the speaker check **structurally incapable of firing**.
+  It printed `PASS` on a script naming someone else. It now refuses to run and
+  names the missing flag.
+- `looks_ok` reported `"no ANTHROPIC_API_KEY set"` for *any* exception when that
+  variable was unset — wrong for Bedrock, Vertex, or a caller-supplied `client=`,
+  and it hid SDK signature mismatches entirely. It now reports the real error.
+- `ffprobe` failures leaked a Python list repr into the message.
+- Without ffmpeg the test suite crashed on collection instead of skipping.
+
+`--strict`, `--version`, and flags for the five thresholds that were previously
+reachable only from Python (`--min-wpm`, `--loudness-tol`, `--duration-tol`,
+`--min-ratio`, `--silence-threshold`) were added in the same pass.
+
 ### Notes
 
 - The deterministic checks have no dependencies. ffmpeg is invoked as a

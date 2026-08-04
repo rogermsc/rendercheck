@@ -16,6 +16,7 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
+from . import __version__
 from ._core import SilentFail, Skipped
 from .media import assert_duration, assert_loudness, assert_no_dead_air, assert_pace
 from .text import assert_speaker
@@ -24,6 +25,11 @@ from .vision import looks_ok
 _IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
+
+# 2 is "you asked for something impossible" (a path that isn't there); 1 is "I
+# looked and it is broken". Keeping them apart matters in CI, where a typo and a
+# defect need different reactions.
+EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 
 _UNITS = {"pace": "WPM", "loudness": "LUFS", "duration": "s", "dead air": "s silence"}
 
@@ -59,7 +65,7 @@ def _run(planned: Planned) -> Result:
             result = planned.run()
         except SilentFail as exc:
             return Result(FAIL, planned.name, str(exc))
-        except (FileNotFoundError, ValueError) as exc:
+        except ValueError as exc:
             return Result(SKIP, planned.name, str(exc))
         skipped = [str(w.message) for w in caught if issubclass(w.category, Skipped)]
 
@@ -84,29 +90,60 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
 
     if args.script:
         yield Planned(
-            "pace", partial(assert_pace, path, args.script, max_wpm=args.max_wpm)
+            "pace",
+            partial(
+                assert_pace,
+                path,
+                args.script,
+                max_wpm=args.max_wpm,
+                min_wpm=args.min_wpm,
+            ),
         )
-        if args.presenter:
+        if args.presenter and not args.known_names:
+            # Defaulting the roster to [presenter] makes the check structurally
+            # incapable of firing -- a name is only wrong if it is on the roster
+            # AND is not the assigned one. It would print PASS forever, which is
+            # worse than not running it.
             yield Planned(
                 "speaker",
-                partial(
-                    assert_speaker,
-                    args.script,
-                    args.presenter,
-                    args.known_names or [args.presenter],
-                ),
+                None,
+                "--presenter needs --known-names: a roster holding only the "
+                "assigned presenter can never report a mismatch",
+            )
+        elif args.presenter:
+            yield Planned(
+                "speaker",
+                partial(assert_speaker, args.script, args.presenter, args.known_names),
             )
     else:
         yield Planned("pace", None, "no --script given")
 
     yield Planned(
-        "loudness", partial(assert_loudness, path, target_lufs=args.target_lufs)
+        "loudness",
+        partial(
+            assert_loudness, path, target_lufs=args.target_lufs, tol=args.loudness_tol
+        ),
     )
     yield Planned(
-        "dead air", partial(assert_no_dead_air, path, max_silence=args.max_silence)
+        "dead air",
+        partial(
+            assert_no_dead_air,
+            path,
+            max_silence=args.max_silence,
+            threshold_db=args.silence_threshold,
+        ),
     )
     if args.expect_seconds:
-        yield Planned("duration", partial(assert_duration, path, args.expect_seconds))
+        yield Planned(
+            "duration",
+            partial(
+                assert_duration,
+                path,
+                args.expect_seconds,
+                tol=args.duration_tol,
+                min_ratio=args.min_ratio,
+            ),
+        )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -114,8 +151,11 @@ def _parser() -> argparse.ArgumentParser:
         prog="rendercheck",
         description="Run every applicable check against one generated media file.",
     )
-    parser.add_argument("command", choices=["check"])
-    parser.add_argument("file", type=Path)
+    parser.add_argument("command", choices=["check"], help="what to do")
+    parser.add_argument("file", type=Path, help="the generated media file to check")
+    parser.add_argument(
+        "--version", action="version", version=f"rendercheck {__version__}"
+    )
     parser.add_argument(
         "--script", help="narration text, or a path to a transcript/.vtt/.srt"
     )
@@ -134,10 +174,44 @@ def _parser() -> argparse.ArgumentParser:
         metavar="CLAIM",
         help="plain-English claims an image must satisfy",
     )
-    parser.add_argument("--expect-seconds", type=float, help="expected duration")
-    parser.add_argument("--max-wpm", type=float, default=245.0)
-    parser.add_argument("--target-lufs", type=float, default=-16.0)
-    parser.add_argument("--max-silence", type=float, default=3.0)
+    parser.add_argument(
+        "--expect-seconds", type=float, help="expected duration, in seconds"
+    )
+    parser.add_argument(
+        "--max-wpm", type=float, default=245.0, help="fastest acceptable narration"
+    )
+    parser.add_argument(
+        "--min-wpm", type=float, default=110.0, help="slowest acceptable narration"
+    )
+    parser.add_argument(
+        "--target-lufs", type=float, default=-16.0, help="integrated loudness target"
+    )
+    parser.add_argument(
+        "--loudness-tol", type=float, default=2.0, help="allowed dB either side"
+    )
+    parser.add_argument(
+        "--max-silence", type=float, default=3.0, help="longest acceptable gap"
+    )
+    parser.add_argument(
+        "--silence-threshold",
+        type=float,
+        default=-50.0,
+        help="dB below which audio counts as silent; raise for recorded audio",
+    )
+    parser.add_argument(
+        "--duration-tol", type=float, default=0.5, help="allowed drift, in seconds"
+    )
+    parser.add_argument(
+        "--min-ratio",
+        type=float,
+        default=0.5,
+        help="below this share of the expected length it is a broken encode",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="a check that could not run counts as a failure",
+    )
     parser.add_argument(
         "--json",
         action="store_true",
@@ -148,10 +222,19 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    results = [_run(planned) for planned in _plan(args.file, args)]
+    if not args.file.exists():
+        print(f"rendercheck: no such file: {args.file}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        results = [_run(planned) for planned in _plan(args.file, args)]
+    except FileNotFoundError as exc:
+        # A path you typed that isn't there is your bug, not the checker's.
+        print(f"rendercheck: {exc}", file=sys.stderr)
+        return EXIT_USAGE
 
     failures = sum(1 for r in results if r.status == FAIL)
     skips = sum(1 for r in results if r.status == SKIP)
+    passed = len(results) - failures - skips
 
     if args.json:
         print(
@@ -173,9 +256,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         width = max(len(r.name) for r in results)
         for status, name, detail in results:
             print(f"  {status}  {name:<{width}}  {detail}")
-        passed = len(results) - failures - skips
         print(f"\n{passed} passed, {failures} failed, {skips} skipped")
-    return 1 if failures else 0
+        if not passed:
+            print("nothing could be measured -- this is not a clean run")
+
+    # An empty run is the failure this library is named after: every check
+    # skipped means nothing was looked at, and a green build would be a lie.
+    # That holds without --strict; --strict additionally rejects partial runs.
+    if failures or not passed or (args.strict and skips):
+        return EXIT_FAILED
+    return EXIT_OK
 
 
 if __name__ == "__main__":

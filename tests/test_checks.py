@@ -7,9 +7,11 @@ tests exercise the real measurement path instead of a mock of it.
     pytest tests/ -q                # also works
 """
 
+import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -82,6 +84,12 @@ def build_fixtures():
     bogus.write_text("this is not a video")  # for the fail-open check
     return tone, quiet, silence, minute, bogus, noaudio
 
+
+if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+    # Fixtures are generated, not committed. Without ffmpeg this module used to
+    # die during collection with a bare FileNotFoundError; SkipTest is stdlib and
+    # pytest reads it as "skip the module", which is what a contributor deserves.
+    raise unittest.SkipTest("fixtures need ffmpeg and ffprobe on PATH")
 
 TONE, QUIET, SILENCE, MINUTE, BOGUS, NOAUDIO = build_fixtures()
 
@@ -202,6 +210,22 @@ def test_speaker_requires_a_roster():
         assert "roster" in str(exc)
     else:
         raise AssertionError("an empty roster must be rejected, not silently trusted")
+
+
+def test_a_typod_script_path_is_not_read_as_narration():
+    # It used to fall through to "this is transcript text", making a bad path
+    # one word of narration and reporting "1 WPM is below 110" -- a confident,
+    # wrong verdict about the audio for a mistake in the *script* argument.
+    try:
+        read_script("episode-12.vtt")
+    except FileNotFoundError as exc:
+        assert "no such script file" in str(exc)
+    else:
+        raise AssertionError("a missing .vtt must raise, not become narration")
+
+
+def test_real_narration_is_still_read_as_text():
+    assert read_script("Hi, I'm Jordan, and today we cover pricing.").startswith("Hi")
 
 
 # --- looks_ok: severity handling, with a stub in place of the model ---------

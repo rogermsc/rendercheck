@@ -98,8 +98,10 @@ def has_audio(path: str | Path) -> bool:
         # ffprobe could not read the file at all. That is "cannot tell", which
         # must fail open -- reporting "no audio stream" for a file nothing can
         # open would be a confident wrong diagnosis.
+        reported = proc.stderr.strip().splitlines()
         raise ToolUnavailable(
-            f"ffprobe could not read {path}: {proc.stderr.strip().splitlines()[-1:]}"
+            f"ffprobe could not read {path}: "
+            f"{reported[-1] if reported else 'ffprobe gave no reason'}"
         )
     return "audio" in proc.stdout
 

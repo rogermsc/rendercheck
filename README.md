@@ -50,8 +50,10 @@ rendercheck check episode-12.mp3 --script episode-12.vtt
   1 passed, 2 failed, 0 skipped
 ```
 
-Exit code is 1 if anything failed, so it drops straight into CI. `--json` gives
-you the same report for pipelines in any language.
+Exit code is 1 if anything failed — **or if nothing could be measured**, because
+a run that looked at nothing is not a clean one. A path you typo'd exits 2.
+`--json` gives you the same report for pipelines in any language, and `--strict`
+rejects partial runs too.
 
 In pytest they're just asserts — no plugin, no fixtures:
 

@@ -116,6 +116,24 @@ Turn skips into failures if you would rather be strict:
 warnings.simplefilter("error", rendercheck.Skipped)
 ```
 
+```bash
+rendercheck check lesson.mp4 --strict
+```
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Something was measured and all of it passed |
+| `1` | A defect was measured — or **nothing was**, which is not a pass |
+| `2` | A path you supplied does not exist: `file`, or a `--script` that ends in a transcript extension |
+
+The middle row is the one that matters in CI. A run where every check skipped —
+no ffmpeg on the runner, no `--script`, an image with no `--rubric` — measured
+nothing, and reporting that as green would be the exact failure this library is
+named after. `--strict` goes further and rejects *partial* runs, where some
+checks ran and others could not.
+
 ## Performance
 
 `assert_loudness` and `assert_no_dead_air` share one decode, memoised on the

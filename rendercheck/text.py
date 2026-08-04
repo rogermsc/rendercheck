@@ -20,6 +20,10 @@ _TAG = re.compile(r"<[^>]+>")
 # who is supposed to be on screen.
 _SELF_INTRO = re.compile(r"\b(?:I'm|I am|My name is)\s+([A-Z][a-z]+)")
 
+# Extensions that mean "this string is a filename". Narration text never ends
+# in one, so a non-existent path with one of these is a typo worth raising on.
+_SCRIPT_SUFFIXES = {".vtt", ".srt", ".txt", ".md", ".json", ".text"}
+
 
 def _strip_cues(text: str) -> str:
     kept = [line for line in text.splitlines() if not _CUE_LINE.search(line)]
@@ -40,6 +44,15 @@ def read_script(script: str | Path) -> str:
     except (OSError, ValueError):
         is_file = False  # too long, or contains NULs: it is transcript text
     if not is_file:
+        # A one-line string ending in a transcript extension is a path someone
+        # typo'd, not narration. Treating it as narration is worse than useless:
+        # it reads as one word and reports a confident, wrong verdict about the
+        # *audio* ("1 WPM is below 110") for what is really a bad path.
+        if "\n" not in text and Path(text).suffix.lower() in _SCRIPT_SUFFIXES:
+            raise FileNotFoundError(
+                f"no such script file: {text} -- this ends in a transcript "
+                f"extension, so it is read as a path, not as narration text"
+            )
         return text
     text = path.read_text(encoding="utf-8", errors="replace")
     return _strip_cues(text) if path.suffix.lower() in (".vtt", ".srt") else text

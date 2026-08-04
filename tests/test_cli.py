@@ -7,7 +7,7 @@ than a pytest fixture, so `python tests/test_cli.py` works on its own.
 import io
 import json
 import sys
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,8 +19,10 @@ from tests.test_checks import MINUTE, NOAUDIO, TONE
 
 
 def run(*argv: str) -> tuple[int, str]:
+    # stderr lands in the same buffer: usage errors are reported there, and a
+    # test asserting on them should not care which stream carried the text.
     buffer = io.StringIO()
-    with redirect_stdout(buffer):
+    with redirect_stdout(buffer), redirect_stderr(buffer):
         code = main(["check", *argv])
     return code, buffer.getvalue()
 
@@ -81,6 +83,66 @@ def test_an_image_without_a_rubric_says_why_it_skipped():
     assert [r["check"] for r in results] == ["looks ok"]
     assert results[0]["status"] == "SKIP"
     assert "no --rubric" in results[0]["detail"]
+
+
+# --- the exit-code contract -------------------------------------------------
+# Every one of these returned 0 before. A green build is a claim, and each of
+# these was the tool making that claim without having looked at anything.
+
+
+def test_a_missing_file_is_a_usage_error_not_a_pass():
+    code, out = run("/tmp/rendercheck-definitely-not-here.mp4")
+    assert code == 2, out
+    assert "no such file" in out, out
+
+
+def test_a_run_that_measured_nothing_is_not_a_pass():
+    from tests.test_checks import _slide
+
+    # Image, no rubric: the only applicable check cannot run. Zero measurements
+    # must not read as zero problems.
+    code, out = run(str(_slide()))
+    assert code == 1, out
+    assert "nothing could be measured" in out, out
+
+
+def test_strict_rejects_a_partial_run_that_normal_mode_allows():
+    clean, _ = run(str(TONE))
+    strict, out = run(str(TONE), "--strict")
+    assert clean == 0
+    assert strict == 1, out
+
+
+def test_presenter_without_a_roster_refuses_instead_of_passing():
+    # With a roster of just the assigned presenter the check is structurally
+    # incapable of firing, so it used to print PASS on a script naming someone
+    # else entirely.
+    code, out = run(str(TONE), "--script", "Hi, I'm Jordan.", "--presenter", "Alex")
+    speaker = [line for line in out.splitlines() if "speaker" in line]
+    assert speaker and "SKIP" in speaker[0], out
+    assert "--known-names" in speaker[0], out
+    assert code != 0, out
+
+
+def test_a_roster_makes_the_speaker_check_fire():
+    _, out = run(
+        str(TONE),
+        "--script",
+        "Hi, I'm Jordan.",
+        "--presenter",
+        "Alex",
+        "--known-names",
+        "Alex",
+        "Jordan",
+    )
+    speaker = [line for line in out.splitlines() if "speaker" in line]
+    assert speaker and "FAIL" in speaker[0], out
+
+
+def test_a_typod_script_path_is_a_usage_error():
+    code, out = run(str(TONE), "--script", "episode-12.vtt")
+    assert code == 2, out
+    assert "no such script file" in out, out
 
 
 if __name__ == "__main__":

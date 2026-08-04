@@ -104,6 +104,7 @@ def looks_ok(
     # Everything from here to the response is the fail-open boundary: a missing
     # key, a missing dependency, a rate limit, or a network blip means "could
     # not check", never "checked and it was fine".
+    caller_supplied_client = client is not None
     try:
         if client is None:
             import anthropic
@@ -145,11 +146,13 @@ def looks_ok(
         skip('looks_ok: needs the vision extra -- pip install "rendercheck[vision]"')
         return None
     except Exception as exc:
-        detail = (
-            "no ANTHROPIC_API_KEY set"
-            if not os.environ.get("ANTHROPIC_API_KEY")
-            else exc
-        )
+        # Report what actually went wrong. Guessing "no API key" for every
+        # exception is its own silent failure: it sends anyone on Bedrock or
+        # Vertex, or anyone passing client=, chasing a key that is not the
+        # problem, and it hides an SDK signature mismatch completely.
+        detail = f"{type(exc).__name__}: {exc}"
+        if not caller_supplied_client and not os.environ.get("ANTHROPIC_API_KEY"):
+            detail += " -- and no ANTHROPIC_API_KEY is set, which is likely why"
         skip(f"looks_ok: could not review {path} ({detail})")
         return None
 
