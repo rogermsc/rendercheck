@@ -7,6 +7,14 @@
 
 **The worst bugs in generated media don't throw.**
 
+> "the audio often cuts off the final sentence […] though the API returns
+> success without error signals"
+>
+> — a developer on the [OpenAI forum](https://community.openai.com/t/1379584),
+> April 2026, describing production output
+
+![rendercheck demo](docs/demo.gif)
+
 If you generate speech or video with a model — TTS, voice agents, podcasts,
 avatars, AI video — your tests catch the exception that never happens. They do
 not catch the narration that reads at 300 words per minute, the voice track
@@ -30,8 +38,8 @@ looks_ok("slide-14.png", ["the title fits on one line"])
 
 Plain assert functions. No framework, no runner, no config file, no service.
 They raise `AssertionError`, so they already work in pytest, in CI, or in a
-five-line script. The five deterministic checks have **no dependencies and make
-no network calls** — if you have `ffmpeg`, you're ready.
+five-line script. Ten of the eleven checks have **no dependencies and make no
+network calls** — if you have `ffmpeg`, you're ready.
 
 ---
 
@@ -41,7 +49,7 @@ You need `ffmpeg` on your PATH (`brew install ffmpeg`, `apt-get install ffmpeg`,
 or `winget install ffmpeg`). Then:
 
 ```bash
-pip install rendercheck
+pip install git+https://github.com/rogermsc/rendercheck   # PyPI release pending
 rendercheck demo
 ```
 
@@ -89,6 +97,45 @@ def test_episode_is_shippable(episode):
     assert_loudness(episode.audio)
     assert_no_dead_air(episode.audio)
 ```
+
+## "Isn't this forty lines of pyloudnorm?"
+
+For one of the eleven checks, roughly yes. None of these measurements are novel,
+and it would be dishonest to imply otherwise:
+
+| The measurement | Already available from |
+|---|---|
+| Integrated loudness | [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm), ffmpeg's `loudnorm` |
+| Silence detection | [pydub](https://github.com/jiaaro/pydub)`.silence`, ffmpeg's `silencedetect` |
+| Duration, streams | `ffprobe` |
+| Black frames, freezes | ffmpeg's `blackdetect`, `freezedetect` |
+| Speaker identity | [resemblyzer](https://github.com/resemble-ai/resemblyzer) |
+| Video quality metrics | [VMAF](https://github.com/Netflix/vmaf), [ffmpeg-quality-metrics](https://github.com/slhck/ffmpeg-quality-metrics) |
+
+Every one of those hands a **number to a researcher**. None of them is a gate.
+What is actually missing, and what this is:
+
+- **A threshold that came from a defect**, not from a paper. 245 WPM because a
+  real voice narrated at 280 and shipped. −16 LUFS because narration landed at
+  −34 against footage at −13.
+- **A message that says what a person would notice.** "−34.0 LUFS" is a reading.
+  "18.0 dB quieter than the −16 target — it will sound inaudible next to
+  correctly-levelled audio cut alongside it" is a bug report.
+- **Fail-open on infrastructure, fail-closed on a defect**, so it can sit in CI
+  without becoming the thing that breaks the build for its own reasons.
+- **Exit codes and one command over a directory**, rather than a notebook.
+
+Against the LLM-eval tools the difference is structural rather than a matter of
+coverage. [promptfoo](https://github.com/promptfoo/promptfoo),
+[DeepEval](https://github.com/confident-ai/deepeval) and
+[RAGAS](https://github.com/vibrantlabsai/ragas) are excellent and none of them
+can do this: their test case is a **string**. There is no assertion to add,
+because there is nowhere to put the file. Use them for the script; use this for
+what the script turned into.
+
+And if you already run broadcast QC — Interra BATON, Telestream Vidchecker,
+QCTools — you have had most of this for twenty years. It just isn't in your git
+hooks.
 
 ## In your pipeline
 
@@ -206,6 +253,23 @@ the top-right corner -- failed rubric item: 'the title fits on one line'
 
 This is the only check that needs a key: `pip install "rendercheck[vision]"`.
 
+## Five more, for defects other people keep reporting
+
+The six above came out of one pipeline. These came from reading other people's
+bug reports — the same complaint, filed against every provider in turn:
+
+| Check | The defect |
+|---|---|
+| `assert_no_truncation` | Speech that stops mid-sentence while the API returns success. The single most-reported defect in generated audio; measured against the file's own average, so it holds for quiet and loud content alike. |
+| `assert_has_sound` | A clip that comes back silent — an upscale step drops the audio track, a mux points at the wrong stream, a synthesis writes zeroes. |
+| `assert_no_clipping` | A gain stage pushed the waveform past full scale. Crackles on consonants, and turning it down afterwards does not undo it. |
+| `assert_no_black_frames` | Generated video truncating to black instead of erroring: right length, valid container, nothing in the last third. |
+| `assert_not_frozen` | The picture stops moving. Every frame present, every frame the same frame. |
+
+The video pair **skips rather than passes** when a file has no video stream.
+`blackdetect` on a `.wav` reports nothing, and nothing would otherwise read as
+"looked, all clean" — the same trap that produced the regression below.
+
 ---
 
 ## Found on real files
@@ -235,20 +299,48 @@ infrastructure — that still raises.)
 a `rendercheck.Skipped` warning and in the CLI output. An empty run never reads
 as a clean one.
 
-We had to earn the second one. The first cut of this library returned **PASS**
-for a file with no audio track at all — `silencedetect` reports nothing when
-there is nothing to analyse, and that read as "no silence found". A silent
-failure inside rendercheck. It is now the loudest failure in the suite, with a
-regression test named after it, and the line it taught us is the rule everything
-else follows: *if we measured and it is wrong, fail closed; if we could not
-measure, fail open.*
+We had to earn the second one, twice.
+
+The first cut of this library returned **PASS** for a file with no audio track
+at all — `silencedetect` reports nothing when there is nothing to analyse, and
+that read as "no silence found". It is now the loudest failure in the suite,
+with a regression test named after it, and the line it taught is the rule
+everything else follows: *if we measured and it is wrong, fail closed; if we
+could not measure, fail open.*
+
+Then, before releasing under this name, we audited the tool against its own
+premise and found **seven more**. Every one of them reported success without
+having established it:
+
+- An all-skipped run exited `0`. No ffmpeg on the runner meant a green build.
+- A **typo'd file path** exited `0`, contradicting the promise two paragraphs up.
+- A typo'd `--script` path was read as narration — one word — and produced a
+  confident, wrong verdict *about the audio*: `1 WPM is below 110`.
+- `--presenter` without `--known-names` defaulted the roster to the assigned
+  presenter, which made the speaker check **structurally incapable of firing**.
+  It printed `PASS` on a script naming somebody else.
+- `looks_ok` blamed a missing API key for every exception, so an SDK mismatch
+  passed forever and Bedrock users were sent chasing the wrong thing.
+- ffprobe failures leaked a raw Python list into the message.
+- Without ffmpeg the test suite crashed on collection instead of skipping.
+
+All seven are fixed, each with a test that fails without the fix, and the exit
+codes are now a contract: `0` measured and clean, `1` a defect **or nothing
+measured**, `2` a path that isn't there. Details in the
+[changelog](CHANGELOG.md).
+
+A tool that catches silent failures is worth exactly as much as its own honesty
+about them.
 
 ## What it does not check
 
 Being explicit, because a QA tool that implies more coverage than it has is
 worse than none:
 
-- **Lip sync, A/V drift, and video quality.** Nothing here decodes video frames.
+- **Lip sync and A/V drift.** The video checks look for black and frozen
+  stretches; nothing here relates the picture to the sound.
+- **Perceptual video quality.** No PSNR, SSIM, or VMAF — those need a reference
+  encode to compare against, which generated media does not have.
 - **Whether the narration is *correct*** — only how fast it's read.
   Groundedness and factual accuracy are a different problem, well covered by the
   LLM-eval tools.
@@ -259,6 +351,8 @@ worse than none:
 
 ## More
 
+- [Symptoms](docs/symptoms.md) — "the TTS cut off the last sentence", "the clip
+  came back silent", and which check catches each
 - [Reference and tuning](docs/README.md) — every threshold, and when to turn a
   check off
 - [Contributing](CONTRIBUTING.md) — the bar for a new check

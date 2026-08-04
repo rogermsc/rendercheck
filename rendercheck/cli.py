@@ -308,10 +308,21 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+_COLOURS = {PASS: "\033[32m", FAIL: "\033[31m", SKIP: "\033[33m"}
+_RESET = "\033[0m"
+
+
+def _colour() -> bool:
+    """Colour only for a human at a terminal, and never against NO_COLOR."""
+    return sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
 def _print_report(results: list[Result]) -> None:
+    paint = _colour()
     width = max(len(r.name) for r in results)
     for status, name, detail in results:
-        print(f"  {status}  {name:<{width}}  {detail}")
+        label = f"{_COLOURS[status]}{status}{_RESET}" if paint else status
+        print(f"  {label}  {name:<{width}}  {detail}")
 
 
 def _demo() -> int:
@@ -328,7 +339,7 @@ def _demo() -> int:
         )
         return EXIT_USAGE
 
-    bold, plain = ("\033[1m", "\033[0m") if sys.stdout.isatty() else ("", "")
+    bold, plain = ("\033[1m", _RESET) if _colour() else ("", "")
     root = demo.directory()
     print(f"Generated {len(cases)} defective files in {root}\n")
 
