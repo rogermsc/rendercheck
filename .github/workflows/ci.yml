@@ -139,6 +139,25 @@ jobs:
           ! node npm/bin/rendercheck.js check quiet.wav
           node npm/bin/rendercheck.js check /tmp/not-here.wav || test $? -eq 2
 
+      # `npx rendercheck` puts npx's own shim for this package on PATH under the
+      # name the wrapper probes for. Resolving to it means spawning yourself,
+      # forever. This reproduces that layout; a regression hangs the job rather
+      # than failing it, hence the timeouts.
+      - name: The npx wrapper does not resolve to itself
+        run: |
+          SHIM="$PWD/sim/_npx/deadbeef/node_modules/.bin"
+          mkdir -p "$SHIM"
+          printf '#!/bin/sh\nexec node "%s" "$@"\n' "$PWD/npm/bin/rendercheck.js" > "$SHIM/rendercheck"
+          chmod +x "$SHIM/rendercheck"
+
+          # The shim shadows the real CLI: the wrapper must look past it.
+          PATH="$SHIM:$PATH" timeout 60 node npm/bin/rendercheck.js --version
+
+          # And with no real CLI anywhere, it must say so instead of spinning.
+          BARE="/usr/bin:/bin:$(dirname "$(command -v node)")"
+          PATH="$SHIM:$BARE" timeout 60 node npm/bin/rendercheck.js --version \
+            && { echo "expected a non-zero exit"; exit 1; } || test $? -eq 2
+
       - name: The promptfoo assertion grades a real file
         run: |
           python - <<'PY'

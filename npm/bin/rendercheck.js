@@ -13,23 +13,70 @@
 // esbuild does it.
 
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 
-function onPath(command) {
-  const probe = spawnSync(process.platform === "win32" ? "where" : "which", [command], {
-    stdio: "ignore",
+const WINDOWS = process.platform === "win32";
+const GUARD = "RENDERCHECK_NODE_WRAPPER";
+
+// Backstop. If this process was started *by* this wrapper, then the thing we
+// resolved as "the Python CLI" was in fact this script again, and delegating
+// once more would recurse without end. Refuse instead of spinning.
+if (process.env[GUARD] === "1") {
+  console.error(
+    "rendercheck: the Node wrapper resolved to itself, so the Python CLI is\n" +
+      "not actually installed. Install it with one of:\n\n" +
+      "  pipx install rendercheck\n" +
+      "  uv tool install rendercheck\n" +
+      "  pip install rendercheck\n",
+  );
+  process.exit(2);
+}
+
+let selfPath = null;
+try {
+  selfPath = fs.realpathSync(process.argv[1]);
+} catch {
+  /* argv[1] should always resolve, but never fail on the way to a failure */
+}
+
+function candidates(command) {
+  // `which -a` so a shim earlier on PATH does not hide the real binary behind
+  // it. Windows `where` already lists every match.
+  const probe = spawnSync(WINDOWS ? "where" : "which", WINDOWS ? [command] : ["-a", command], {
+    encoding: "utf8",
   });
-  return probe.status === 0;
+  if (probe.status !== 0 || !probe.stdout) return [];
+  return probe.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+// The trap this exists for: `npx rendercheck` puts npx's own shim for this
+// package on PATH under the name `rendercheck`. Probing for that name finds the
+// shim, which points back here -- so the wrapper would spawn itself forever.
+function isThisWrapper(candidate) {
+  try {
+    if (selfPath && fs.realpathSync(candidate) === selfPath) return true;
+  } catch {
+    /* unresolvable: fall through to the path test */
+  }
+  return /[\\/](node_modules|_npx)[\\/]/.test(candidate);
+}
+
+function firstRealBinary(command) {
+  return candidates(command).find((candidate) => !isThisWrapper(candidate)) || null;
 }
 
 // uvx and pipx both run a published tool without installing it permanently,
 // which is the closest thing Python has to npx.
-const runners = [
-  { command: "rendercheck", prefix: [] },
-  { command: "uvx", prefix: ["rendercheck"] },
-  { command: "pipx", prefix: ["run", "rendercheck"] },
-];
-
-const runner = runners.find((candidate) => onPath(candidate.command));
+const direct = firstRealBinary("rendercheck");
+const runner = direct
+  ? { command: direct, prefix: [] }
+  : [
+      { command: "uvx", prefix: ["rendercheck"] },
+      { command: "pipx", prefix: ["run", "rendercheck"] },
+    ].find((candidate) => firstRealBinary(candidate.command));
 
 if (!runner) {
   console.error(
@@ -47,6 +94,7 @@ if (!runner) {
 
 const result = spawnSync(runner.command, [...runner.prefix, ...process.argv.slice(2)], {
   stdio: "inherit",
+  env: { ...process.env, [GUARD]: "1" },
 });
 
 if (result.error) {

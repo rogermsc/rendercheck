@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **npm wrapper 0.2.1 — `npx rendercheck` spawned itself forever.** npx puts its
+  own shim for this package on PATH under the name `rendercheck`, which is
+  exactly the name the wrapper probes for to find the Python CLI. It resolved to
+  the shim, spawned it, and that shim pointed back at the wrapper. `npx
+  rendercheck` hung on the first real use. It now enumerates every match with
+  `which -a`, skips any candidate that resolves to itself or sits under
+  `node_modules`/`_npx`, and carries an environment guard so a shim it cannot
+  recognise costs one wasted hop and a clear error rather than an unbounded
+  loop. Covered by a CI step that rebuilds the npx layout.
+
 ## [0.2.0] - 2026-08-04
 
 First release under this name, and the first on PyPI as `rendercheck`.
