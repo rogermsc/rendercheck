@@ -49,7 +49,7 @@ You need `ffmpeg` on your PATH (`brew install ffmpeg`, `apt-get install ffmpeg`,
 or `winget install ffmpeg`). Then:
 
 ```bash
-pip install git+https://github.com/rogermsc/rendercheck   # PyPI release pending
+pip install rendercheck
 rendercheck demo
 ```
 
