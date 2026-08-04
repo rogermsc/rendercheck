@@ -35,7 +35,7 @@ from .media import (
 from .text import assert_speaker
 from .vision import looks_ok
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "SilentFail",

@@ -6,15 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-08-03
+## [0.2.0] - 2026-08-04
 
-First release. Six assertions for generated media, extracted from a production
-pipeline that renders narrated video at scale.
+First release under this name, and the first on PyPI as `rendercheck`.
 
-Briefly published the same day as `silentfail`, renamed before it had users: the
-name collided with an unrelated AI-tooling project and was not the word anyone
-with this problem would search for. The `SilentFail` exception keeps the old
-name — it is still exactly what the exception means.
+`0.1.0` was published as **`silentfail`** and renamed the next day, before it had
+users: the name collided with an unrelated AI-tooling project, and it was not the
+word anyone with this problem would search for — they search *"veo 3 no audio"*
+and *"tts cut off last sentence"*. The version number moves rather than the tag,
+so the `silentfail` release stays where it is instead of being rewritten. The
+`SilentFail` exception keeps its name; it is still exactly what it means.
+
+Eleven assertions for generated media. Six came out of one production pipeline
+that renders narrated video at scale; five came from reading other people's bug
+reports.
 
 ### Added
 
@@ -97,5 +102,5 @@ reachable only from Python (`--min-wpm`, `--loudness-tol`, `--duration-tol`,
   the file's `(path, mtime, size)` so a re-render is never served a stale
   reading.
 
-[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.1.0
+[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.2.0
