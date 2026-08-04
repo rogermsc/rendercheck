@@ -85,17 +85,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate a defect to catch
+      - name: Generate one clean file and one defective one
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           pip install -e .
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=6" \
             -af loudnorm=I=-34:TP=-1.5:LRA=11 quiet.wav
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=6" \
+            -af "loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st=5.6:d=0.4" clean.wav
 
-      # The composite action installs from PyPI, so `uses: ./` cannot run here
-      # until the project is published under this name. Until then: prove the
-      # file is valid and that the command its final step runs behaves.
-      - name: The action is well-formed and its command fails on a defect
+      # Note this installs rendercheck from PyPI, which is what the action does
+      # for real users -- so it exercises the published package, not this
+      # checkout. That is the behaviour under test.
+      - name: The action passes a clean file
+        uses: ./
+        with:
+          files: clean.wav
+
+      - name: The action fails the build on a defect
+        id: defect
+        continue-on-error: true
+        uses: ./
+        with:
+          files: quiet.wav
+
+      - name: ...and that failure was real, not a green build
+        run: |
+          echo "outcome: ${{ steps.defect.outcome }}"
+          test "${{ steps.defect.outcome }}" = "failure"
+
+      - name: The action file keeps its injection guard
         run: |
           pip install pyyaml
           python - <<'PY'
@@ -112,7 +131,6 @@ jobs:
           assert "$FILES" in check["run"], check["run"]
           print("action.yml ok")
           PY
-          ! rendercheck check quiet.wav
           ! rendercheck check quiet.wav --strict
 
       - name: The npx wrapper passes exit codes through
