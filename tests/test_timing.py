@@ -304,6 +304,9 @@ def test_an_undeclared_duration_skips_rather_than_comparing_against_nothing():
     # invented would be a confident wrong answer.
     mkv = FIXTURES / "no-durations.mkv"
     if not mkv.exists():
+        # aac rather than libopus: every ffmpeg build has it, and Matroska
+        # declares no per-stream duration either way. A test that depends on an
+        # optional encoder fails on the runner rather than on the code.
         _ffmpeg(
             "-f",
             "lavfi",
@@ -318,7 +321,7 @@ def test_an_undeclared_duration_skips_rather_than_comparing_against_nothing():
             "-pix_fmt",
             "yuv420p",
             "-c:a",
-            "libopus",
+            "aac",
             str(mkv),
         )
     from rendercheck import _ffmpeg as probe
@@ -391,9 +394,16 @@ def test_the_default_preset_matches_the_library_default():
 
 
 # --- config -----------------------------------------------------------------
+#
+# Reading a config file needs `tomllib`, which arrived in 3.11. Both branches
+# are real behaviour and both are tested -- on 3.10 the *only* correct outcome
+# is the announced degradation, and asserting the 3.11 behaviour there would be
+# testing an interpreter we do not run on.
 
 
 def test_config_is_read_from_the_nearest_file_upward():
+    if not config.HAVE_TOML:
+        return
     root = FIXTURES / "project"
     (root / "out").mkdir(parents=True, exist_ok=True)
     (root / "rendercheck.toml").write_text('preset = "ebu"\nmax-silence = 9.0\n')
@@ -402,6 +412,8 @@ def test_config_is_read_from_the_nearest_file_upward():
 
 
 def test_an_unknown_config_key_is_reported_rather_than_ignored():
+    if not config.HAVE_TOML:
+        return
     root = FIXTURES / "typo"
     root.mkdir(parents=True, exist_ok=True)
     (root / "rendercheck.toml").write_text("max_slience = 9.0\n")
@@ -413,12 +425,34 @@ def test_an_unknown_config_key_is_reported_rather_than_ignored():
 
 
 def test_a_pyproject_section_works_the_same_as_a_standalone_file():
+    if not config.HAVE_TOML:
+        return
     root = FIXTURES / "pyproject-only"
     root.mkdir(parents=True, exist_ok=True)
     (root / "pyproject.toml").write_text(
         '[project]\nname = "x"\n\n[tool.rendercheck]\nmax_silence = 4.0\n'
     )
     assert config.load(start=root, known={"max_silence"}) == {"max_silence": 4.0}
+
+
+def test_python_310_says_it_is_ignoring_the_file_rather_than_doing_it_silently():
+    # The whole point: a config file that quietly does nothing is the failure
+    # this library is named after. On 3.10 it has to announce itself.
+    if config.HAVE_TOML:
+        return
+    root = FIXTURES / "no-toml"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "rendercheck.toml").write_text("max_silence = 9.0\n")
+    noise = io.StringIO()
+    with redirect_stderr(noise):
+        settings = config.load(start=root, known={"max_silence"})
+    assert settings == {}, settings
+    assert "3.11" in noise.getvalue(), noise.getvalue()
+
+
+def test_a_missing_config_is_not_an_error():
+    # Held outside the version guard: this is the common case on every version.
+    assert config.load(start=Path(FIXTURES.anchor), known=set()) == {}
 
 
 if __name__ == "__main__":
