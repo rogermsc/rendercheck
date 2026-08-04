@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rendercheck — try it on your own file</title>
+    <meta
+      name="description"
+      content="Drop a generated audio or video file and see the checks fire. Runs entirely in your browser; nothing is uploaded."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --paper: #fbfaf8;
+        --ink: #16211f;
+        --teal: #2f6f6a;
+        --teal-soft: #dfeae8;
+        --muted: #6b7c78;
+        --rule: #dcd8d0;
+        --fail: #c0392b;
+        --pass: #2f7d52;
+        --skip: #9a7a1f;
+        --panel: #16211f;
+        --panel-fail: #ff6b5e;
+        --panel-pass: #5ddb9a;
+        --panel-skip: #e8c46a;
+        --panel-dim: #8fa39e;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      html { -webkit-text-size-adjust: 100%; }
+
+      body {
+        background-color: var(--paper);
+        /* Graph paper: this is an instrument, and instruments sit on a bench. */
+        background-image:
+          linear-gradient(var(--rule) 1px, transparent 1px),
+          linear-gradient(90deg, var(--rule) 1px, transparent 1px);
+        background-size: 28px 28px;
+        background-position: -1px -1px;
+        color: var(--ink);
+        font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 15px;
+        line-height: 1.6;
+        min-height: 100vh;
+        padding: 0 24px 96px;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0 0 auto 0;
+        height: 6px;
+        background: var(--teal);
+        z-index: 10;
+      }
+
+      .sheet {
+        max-width: 960px;
+        margin: 0 auto;
+        background: var(--paper);
+        border-left: 1px solid var(--rule);
+        border-right: 1px solid var(--rule);
+        padding: 0 clamp(20px, 5vw, 56px);
+        min-height: 100vh;
+      }
+
+      header { padding: 72px 0 0; }
+
+      h1 {
+        font-size: clamp(38px, 7vw, 62px);
+        font-weight: 700;
+        letter-spacing: -0.04em;
+        line-height: 1;
+      }
+      h1 .b { color: var(--teal); }
+
+      .tagline {
+        margin-top: 18px;
+        font-size: clamp(17px, 2.4vw, 21px);
+        font-weight: 500;
+        max-width: 34em;
+      }
+
+      .lede {
+        margin-top: 14px;
+        color: var(--muted);
+        max-width: 40em;
+      }
+
+      .lede a { color: var(--teal); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+      /* --- the input plate ------------------------------------------------ */
+
+      .plate {
+        margin-top: 36px;
+        border: 1.5px dashed var(--teal);
+        background: var(--teal-soft);
+        border-radius: 4px;
+        padding: 44px 28px;
+        text-align: center;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+        position: relative;
+      }
+      .plate:hover { background: #d6e5e2; }
+      .plate.hot {
+        background: #cfe3df;
+        border-color: var(--ink);
+        transform: scale(1.006);
+      }
+      .plate:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+      .plate[aria-disabled="true"] { opacity: 0.55; cursor: progress; }
+
+      .plate .big { font-size: 19px; font-weight: 600; }
+      .plate .small { margin-top: 8px; color: var(--muted); font-size: 13.5px; }
+      .plate input { display: none; }
+
+      .privacy {
+        margin-top: 14px;
+        font-size: 13px;
+        color: var(--muted);
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .privacy b { color: var(--teal); font-weight: 600; }
+
+      /* --- status --------------------------------------------------------- */
+
+      .status {
+        margin-top: 22px;
+        font-size: 13.5px;
+        color: var(--muted);
+        min-height: 22px;
+      }
+      .status .bar {
+        display: inline-block;
+        width: 150px;
+        height: 8px;
+        background: var(--rule);
+        vertical-align: middle;
+        margin-left: 10px;
+        position: relative;
+        overflow: hidden;
+      }
+      .status .bar i {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 38%;
+        background: var(--teal);
+        animation: sweep 1.1s ease-in-out infinite;
+      }
+      @keyframes sweep {
+        0% { left: -38%; }
+        100% { left: 100%; }
+      }
+
+      /* --- readout -------------------------------------------------------- */
+
+      .readout {
+        margin-top: 28px;
+        background: var(--panel);
+        border-radius: 6px;
+        padding: 26px 26px 28px;
+        color: #cfd8d5;
+        overflow-x: auto;
+        box-shadow: 0 18px 40px -28px rgba(22, 33, 31, 0.8);
+      }
+
+      .readout .file {
+        color: var(--panel-dim);
+        font-size: 13px;
+        padding-bottom: 12px;
+        margin-bottom: 14px;
+        border-bottom: 1px solid #2b3a37;
+        word-break: break-all;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 46px 118px 1fr;
+        gap: 14px;
+        padding: 5px 0;
+        font-size: 14px;
+        align-items: baseline;
+        animation: appear 260ms ease both;
+      }
+      @keyframes appear {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: none; }
+      }
+      .row .st { font-weight: 700; }
+      .row .st.FAIL { color: var(--panel-fail); }
+      .row .st.PASS { color: var(--panel-pass); }
+      .row .st.SKIP { color: var(--panel-skip); }
+      .row .nm { color: var(--panel-dim); }
+      .row .dt { color: #dde5e3; }
+
+      .tally {
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 1px solid #2b3a37;
+        font-size: 13.5px;
+        color: var(--panel-dim);
+      }
+      .tally b { color: #fff; font-weight: 600; }
+
+      .note {
+        margin-top: 12px;
+        font-size: 13px;
+        color: var(--panel-skip);
+      }
+
+      /* --- prose ---------------------------------------------------------- */
+
+      .cols {
+        margin-top: 56px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 28px;
+        border-top: 1px solid var(--rule);
+        padding-top: 28px;
+      }
+      .cols h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--teal);
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      .cols p { font-size: 13.5px; color: var(--muted); }
+      .cols code {
+        background: var(--teal-soft);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--ink);
+        font-size: 12.5px;
+      }
+      .cols a { color: var(--teal); }
+
+      footer {
+        margin-top: 44px;
+        padding-top: 20px;
+        border-top: 1px solid var(--rule);
+        font-size: 13px;
+        color: var(--muted);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+      }
+      footer a { color: var(--teal); }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before { animation: none !important; transition: none !important; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="sheet">
+      <header>
+        <h1>render<span class="b">check</span></h1>
+        <p class="tagline">
+          The worst bugs in generated media don&rsquo;t throw. Drop a file and
+          watch these ones throw.
+        </p>
+        <p class="lede">
+          The same checks as the
+          <a href="https://github.com/rogermsc/rendercheck">command-line tool</a>,
+          running on a build of ffmpeg compiled to WebAssembly.
+        </p>
+      </header>
+
+      <div
+        class="plate"
+        id="plate"
+        role="button"
+        tabindex="0"
+        aria-label="Choose an audio or video file to check"
+      >
+        <div class="big" id="plate-big">Drop an audio or video file</div>
+        <div class="small" id="plate-small">
+          or click to choose &middot; mp3, wav, m4a, mp4, mov, webm
+        </div>
+        <input type="file" id="picker" accept="audio/*,video/*" />
+      </div>
+
+      <p class="privacy">
+        <b>&#9679;</b>
+        <span>
+          Nothing is uploaded. The file is decoded in this tab and never leaves
+          your machine &mdash; there is no server to send it to.
+        </span>
+      </p>
+
+      <div class="status" id="status"></div>
+
+      <div class="readout" id="readout" hidden>
+        <div class="file" id="readout-file"></div>
+        <div id="rows"></div>
+        <div class="tally" id="tally"></div>
+      </div>
+
+      <section class="cols">
+        <div>
+          <h2>What it measures</h2>
+          <p>
+            Loudness in LUFS, silent stretches, samples clipped at full scale,
+            whether the audio was allowed to finish, and &mdash; for video
+            &mdash; black and frozen stretches. Same thresholds as the CLI.
+          </p>
+        </div>
+        <div>
+          <h2>Why the browser is slower</h2>
+          <p>
+            WebAssembly decodes at a fraction of native speed and this page
+            downloads ~32&nbsp;MB of ffmpeg the first time. Short clips are
+            pleasant; a 40-minute lesson is not. Use the CLI for those.
+          </p>
+        </div>
+        <div>
+          <h2>Run it properly</h2>
+          <p>
+            <code>pip install rendercheck</code> then
+            <code>rendercheck demo</code>. It takes directories, has a
+            <code>--json</code> mode, and exits non-zero when a render is broken
+            &mdash; or when nothing could be measured.
+          </p>
+        </div>
+      </section>
+
+      <footer>
+        <a href="https://github.com/rogermsc/rendercheck">Source</a>
+        <a href="https://github.com/rogermsc/rendercheck/blob/main/docs/symptoms.md">Symptoms &rarr; checks</a>
+        <a href="https://github.com/rogermsc/rendercheck/blob/main/docs/README.md">Reference</a>
+        <span>MIT</span>
+      </footer>
+    </div>
+
+    <script type="module">
+      // ffmpeg is pulled in with a dynamic import(), deliberately, rather than
+      // a top-level one. Top-level imports block this whole module until they
+      // resolve, so the drop handler would not exist until ~32 MB had finished
+      // downloading -- and a file dropped before then does nothing at all, with
+      // no error to show for it. That is precisely the failure this project is
+      // about. Listeners attach immediately; the download starts on first use.
+      //
+      // The wrapper is vendored under vendor/ffmpeg/ rather than loaded from a
+      // CDN because @ffmpeg/ffmpeg spawns a Worker from its own URL, and a
+      // browser refuses to construct a Worker from another origin. Same-origin
+      // files sidestep that, and pin the version besides. Only the 32 MB core
+      // comes over the network, which is what blob URLs are for.
+      const FFMPEG_ESM = "./vendor/ffmpeg/index.js";
+      // The ESM core, because the worker is a module worker and imports it for
+      // its default export. The UMD build has no default and fails at load.
+      const CORE = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
+
+      const plate = document.getElementById("plate");
+      const plateBig = document.getElementById("plate-big");
+      const plateSmall = document.getElementById("plate-small");
+      const picker = document.getElementById("picker");
+      const statusEl = document.getElementById("status");
+      const readout = document.getElementById("readout");
+      const readoutFile = document.getElementById("readout-file");
+      const rowsEl = document.getElementById("rows");
+      const tallyEl = document.getElementById("tally");
+
+      let ffmpeg = null;
+      let busy = false;
+
+      // @ffmpeg/util exists to provide this. Five lines is cheaper than another
+      // cross-origin module fetch that can fail on its own schedule.
+      async function toBlobURL(url, type) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`could not fetch ${url} (${response.status})`);
+        return URL.createObjectURL(new Blob([await response.arrayBuffer()], { type }));
+      }
+
+      // Thresholds, kept identical to the Python defaults.
+      const MAX_WPM = 245;
+      const TARGET_LUFS = -16;
+      const LOUDNESS_TOL = 2;
+      const MAX_SILENCE = 3;
+      const SILENCE_DB = -50;
+      const MIN_TAIL_DROP = 6;
+      const MAX_CLIPPED = 100;
+      const MAX_BLACK = 1;
+      const MAX_FREEZE = 3;
+      const TAIL_SECONDS = 0.25;
+
+      function say(text, working) {
+        statusEl.innerHTML = working
+          ? `${text}<span class="bar"><i></i></span>`
+          : text;
+      }
+
+      function timestamp(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${String(s).padStart(2, "0")}`;
+      }
+
+      async function loadFfmpeg() {
+        if (ffmpeg) return ffmpeg;
+        say("Downloading ffmpeg (~32 MB, once per browser)", true);
+        const { FFmpeg } = await import(FFMPEG_ESM);
+        const instance = new FFmpeg();
+        instance.on("log", ({ message }) => log.push(message));
+        await instance.load({
+          coreURL: await toBlobURL(`${CORE}/ffmpeg-core.js`, "text/javascript"),
+          wasmURL: await toBlobURL(`${CORE}/ffmpeg-core.wasm`, "application/wasm"),
+        });
+        ffmpeg = instance;
+        return ffmpeg;
+      }
+
+      let log = [];
+
+      async function run(args) {
+        log = [];
+        await ffmpeg.exec(args);
+        return log.join("\n");
+      }
+
+      function findAll(text, pattern) {
+        return [...text.matchAll(pattern)].map((m) => parseFloat(m[1]));
+      }
+
+      // `name` is what ffmpeg was given; `shown` is what the person dropped.
+      // Messages must name the second, or they read as being about some
+      // other file entirely.
+      async function analyse(name, shown) {
+        const results = [];
+
+        // silencedetect first, loudnorm second -- exactly as the library does
+        // it, and for the same reason: loudnorm is a filter, so anything after
+        // it measures audio it has already normalised. A quiet file gets
+        // boosted on the way through and its gaps stop registering.
+        // volumedetect gets its own pass for that reason too.
+        const audio = await run([
+          "-nostdin", "-i", name,
+          "-af",
+          `silencedetect=noise=${SILENCE_DB}dB:d=${MAX_SILENCE},loudnorm=print_format=json`,
+          "-f", "null", "-",
+        ]);
+
+        const hasAudio = /Stream #\d+:\d+.*: Audio:/.test(audio);
+        const hasVideo = /Stream #\d+:\d+.*: Video:/.test(audio);
+        const durationMatch = audio.match(/Duration: (\d+):(\d+):([\d.]+)/);
+        const duration = durationMatch
+          ? +durationMatch[1] * 3600 + +durationMatch[2] * 60 + +durationMatch[3]
+          : null;
+
+        if (!hasAudio && !hasVideo) {
+          return [["SKIP", "readable", "ffmpeg could not find any stream in this file"]];
+        }
+
+        if (!hasAudio) {
+          // One line, not four. A missing track is one defect.
+          results.push([
+            "FAIL", "has sound",
+            `${shown} has no audio stream at all -- this is not silence, it is a missing track, and it usually means a mux step dropped the audio or was never given any. Nothing downstream will play sound`,
+          ]);
+        } else {
+          const blob = audio.match(/\{[^{}]*"input_i"[^{}]*\}/s);
+          const loudness = blob ? parseFloat(JSON.parse(blob[0]).input_i) : NaN;
+
+          if (!isFinite(loudness) && loudness < 0) {
+            results.push([
+              "FAIL", "loudness",
+              `${shown} carries an audio stream but it is digital silence -- every sample is zero, which is what a failed render or a muted mix looks like`,
+            ]);
+          } else if (Number.isNaN(loudness)) {
+            results.push(["SKIP", "loudness", "loudnorm measured nothing"]);
+          } else {
+            const delta = loudness - TARGET_LUFS;
+            if (Math.abs(delta) > LOUDNESS_TOL) {
+              const dir = delta < 0 ? "quieter than" : "louder than";
+              const heard = delta < 0 ? "inaudible" : "blaring";
+              results.push([
+                "FAIL", "loudness",
+                `${loudness.toFixed(1)} LUFS is ${Math.abs(delta).toFixed(1)} dB ${dir} the ${TARGET_LUFS} target -- it will sound ${heard} next to correctly-levelled audio cut alongside it: ${shown}`,
+              ]);
+            } else {
+              results.push(["PASS", "loudness", `${loudness.toFixed(1)} LUFS`]);
+            }
+          }
+
+          const starts = findAll(audio, /silence_start: (-?[\d.]+)/g);
+          const ends = findAll(audio, /silence_end: (-?[\d.]+)/g);
+          if (starts.length && ends.length < starts.length && duration) ends.push(duration);
+          const gaps = starts.map((s, i) => [s, ends[i]]).filter((g) => g[1] != null);
+          if (gaps.length) {
+            const worst = gaps.reduce((a, b) => (b[1] - b[0] > a[1] - a[0] ? b : a));
+            results.push([
+              "FAIL", "dead air",
+              `${(worst[1] - worst[0]).toFixed(1)}s of silence starting at ${timestamp(worst[0])} exceeds the ${MAX_SILENCE}s limit -- a gap this long mid-file is a dropped segment, not a pause (${gaps.length} found in total): ${shown}`,
+            ]);
+          } else {
+            results.push(["PASS", "dead air", "0.0 s silence"]);
+          }
+
+          say("Measuring levels", true);
+          const volume = await run([
+            "-nostdin", "-i", name, "-af", "volumedetect", "-f", "null", "-",
+          ]);
+          const mean = volume.match(/mean_volume: (-?[\d.]+) dB/);
+          const clipped = volume.match(/histogram_0db: (\d+)/);
+          const clippedCount = clipped ? +clipped[1] : 0;
+          if (clippedCount > MAX_CLIPPED) {
+            results.push([
+              "FAIL", "clipping",
+              `${clippedCount} samples in ${shown} are pinned at 0 dBFS, past the ${MAX_CLIPPED} allowed -- the waveform was flattened where it clipped, which crackles on consonants and cannot be undone by lowering the level afterwards`,
+            ]);
+          } else {
+            results.push(["PASS", "clipping", `${clippedCount} samples at 0 dBFS`]);
+          }
+
+          if (mean) {
+            say("Measuring how it ends", true);
+            const tail = await run([
+              "-nostdin", "-sseof", `-${TAIL_SECONDS}`, "-i", name,
+              "-af", "volumedetect", "-f", "null", "-",
+            ]);
+            const tailMean = tail.match(/mean_volume: (-?[\d.]+) dB/);
+            if (tailMean) {
+              const drop = parseFloat(mean[1]) - parseFloat(tailMean[1]);
+              if (drop < MIN_TAIL_DROP) {
+                results.push([
+                  "FAIL", "truncation",
+                  `${shown} is still at its full average level ${drop.toFixed(1)} dB into the final ${TAIL_SECONDS}s (expected at least ${MIN_TAIL_DROP} dB of fall-off) -- audio that stops flat was cut rather than finished, which is what a dropped last sentence looks like from outside`,
+                ]);
+              } else {
+                results.push(["PASS", "truncation", `${drop.toFixed(1)} dB of fall-off at the end`]);
+              }
+            }
+          }
+        }
+
+        if (hasVideo) {
+          say("Looking at the picture", true);
+          const video = await run([
+            "-nostdin", "-i", name,
+            "-vf", `blackdetect=d=${MAX_BLACK}:pic_th=0.98,freezedetect=n=-60dB:d=${MAX_FREEZE}`,
+            "-f", "null", "-",
+          ]);
+          const blacks = [...video.matchAll(
+            /black_start:(-?[\d.]+) black_end:[\d.]+ black_duration:([\d.]+)/g
+          )].map((m) => [parseFloat(m[1]), parseFloat(m[2])]);
+          if (blacks.length) {
+            const worst = blacks.reduce((a, b) => (b[1] > a[1] ? b : a));
+            results.push([
+              "FAIL", "black frames",
+              `${worst[1].toFixed(1)}s of solid black starting at ${timestamp(worst[0])} exceeds the ${MAX_BLACK}s limit -- a stretch this long is a render that stopped producing picture, not a transition (${blacks.length} found in total): ${shown}`,
+            ]);
+          } else {
+            results.push(["PASS", "black frames", "0.0 s black"]);
+          }
+
+          const fs = findAll(video, /freeze_start: (-?[\d.]+)/g);
+          const fd = findAll(video, /freeze_duration: ([\d.]+)/g);
+          if (fs.length && fd.length) {
+            const i = fd.indexOf(Math.max(...fd));
+            results.push([
+              "FAIL", "frozen",
+              `the picture stops moving for ${fd[i].toFixed(1)}s at ${timestamp(fs[i])}, past the ${MAX_FREEZE}s limit -- a generated clip that freezes is a failed render playing as a still, and it will not look intentional: ${shown}`,
+            ]);
+          } else {
+            results.push(["PASS", "frozen", "0.0 s frozen"]);
+          }
+        }
+
+        results.push([
+          "SKIP", "pace",
+          "needs the narration script -- run the CLI with --script to time the delivery",
+        ]);
+
+        return results;
+      }
+
+      function render(shown, results) {
+        readoutFile.textContent = `$ rendercheck check ${shown}`;
+        rowsEl.innerHTML = "";
+        results.forEach(([status, check, detail], i) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          row.style.animationDelay = `${i * 45}ms`;
+          row.innerHTML =
+            `<span class="st ${status}">${status}</span>` +
+            `<span class="nm"></span><span class="dt"></span>`;
+          row.querySelector(".nm").textContent = check;
+          row.querySelector(".dt").textContent = detail;
+          rowsEl.appendChild(row);
+        });
+
+        const failed = results.filter((r) => r[0] === "FAIL").length;
+        const skipped = results.filter((r) => r[0] === "SKIP").length;
+        const passed = results.length - failed - skipped;
+        tallyEl.innerHTML =
+          `<b>${passed}</b> passed, <b>${failed}</b> failed, <b>${skipped}</b> skipped` +
+          (passed === 0
+            ? `<div class="note">nothing could be measured &mdash; this is not a clean run</div>`
+            : "");
+        readout.hidden = false;
+      }
+
+      async function handle(file) {
+        if (busy) return;
+        busy = true;
+        plate.setAttribute("aria-disabled", "true");
+        plateBig.textContent = file.name;
+        plateSmall.textContent = `${(file.size / 1048576).toFixed(1)} MB`;
+        readout.hidden = true;
+
+        try {
+          await loadFfmpeg();
+          say("Decoding and measuring", true);
+          // Keep the extension: ffmpeg picks its demuxer from it.
+          const safe = `input.${(file.name.split(".").pop() || "bin").toLowerCase()}`;
+          await ffmpeg.writeFile(safe, new Uint8Array(await file.arrayBuffer()));
+          const results = await analyse(safe, file.name);
+          render(file.name, results);
+          say("");
+          await ffmpeg.deleteFile(safe).catch(() => {});
+        } catch (error) {
+          // The library's own rule, applied to its shop window: if it could not
+          // measure, say so plainly rather than implying the file is fine.
+          say("");
+          readoutFile.textContent = file.name;
+          rowsEl.innerHTML = "";
+          tallyEl.innerHTML =
+            `<div class="note">Could not run in this browser: ${String(error.message || error)
+              .replace(/</g, "&lt;")
+              .slice(0, 200)}<br />This is the playground failing, not a verdict on your file. ` +
+            `The command-line tool has none of these constraints.</div>`;
+          readout.hidden = false;
+        } finally {
+          busy = false;
+          plate.removeAttribute("aria-disabled");
+        }
+      }
+
+      plate.addEventListener("click", () => !busy && picker.click());
+      plate.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          !busy && picker.click();
+        }
+      });
+      picker.addEventListener("change", () => {
+        if (picker.files[0]) handle(picker.files[0]);
+      });
+      ["dragenter", "dragover"].forEach((type) =>
+        plate.addEventListener(type, (e) => {
+          e.preventDefault();
+          plate.classList.add("hot");
+        })
+      );
+      ["dragleave", "drop"].forEach((type) =>
+        plate.addEventListener(type, (e) => {
+          e.preventDefault();
+          plate.classList.remove("hot");
+        })
+      );
+      plate.addEventListener("drop", (e) => {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) handle(file);
+      });
+      window.addEventListener("dragover", (e) => e.preventDefault());
+      window.addEventListener("drop", (e) => e.preventDefault());
+    </script>
+  </body>
+</html>

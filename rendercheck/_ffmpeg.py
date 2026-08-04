@@ -250,6 +250,15 @@ def _measure(
     path = fingerprint[0]
     # Both filters in one chain: decoding is the cost, and the two readings are
     # almost always wanted together (the CLI asks for both on every file).
+    #
+    # silencedetect goes FIRST, and the order is load-bearing. loudnorm is a
+    # filter, not just a meter: downstream filters see audio it has already
+    # normalised. A quiet file gets boosted on the way through, which lifts its
+    # near-silent stretches above the threshold and hides them -- measured, on a
+    # -40 dBFS file with a five-second gap: one gap found this way, zero the
+    # other way. Quiet material is exactly the population most likely to have
+    # the defect. silencedetect passes audio through untouched, so loudnorm
+    # still reads the same figure from second place.
     proc = _run(
         "ffmpeg",
         [
@@ -258,8 +267,8 @@ def _measure(
             path,
             "-af",
             (
-                f"loudnorm=print_format=json,"
-                f"silencedetect=noise={threshold_db}dB:d={min_seconds}"
+                f"silencedetect=noise={threshold_db}dB:d={min_seconds},"
+                f"loudnorm=print_format=json"
             ),
             "-f",
             "null",

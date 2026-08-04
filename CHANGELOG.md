@@ -50,7 +50,18 @@ name — it is still exactly what the exception means.
   real checks against them. Every check here only fires on *broken* media, so
   trying the library used to require already owning a broken render.
 
-### Fixed — seven silent failures found inside the checker itself
+### Fixed — eight silent failures found inside the checker itself
+
+**`assert_no_dead_air` missed gaps in quiet audio.** `loudnorm` and
+`silencedetect` share one decode, and `loudnorm` was first in the chain — but
+`loudnorm` is a *filter*, not just a meter, so the gap detector was reading audio
+it had already normalised. A quiet file got boosted on the way through, which
+lifted its near-silent stretches above the threshold and hid them. Measured on a
+−40 dBFS file with a five-second gap: **zero gaps found the old way, one the
+new way**, with an identical loudness reading either way. Quiet material is
+exactly the population most likely to have this defect, so the miss was aimed at
+the worst possible audience. `silencedetect` now runs first.
+
 
 Audited before the first release under this name. Every one of these made the
 tool report success without having established it:

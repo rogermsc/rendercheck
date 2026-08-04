@@ -189,6 +189,33 @@ def test_dead_air_accepts_continuous_audio():
     assert assert_no_dead_air(TONE) == 0.0
 
 
+def test_dead_air_is_found_in_quiet_audio_too():
+    """Regression: loudnorm used to run before silencedetect in the chain.
+
+    It is a filter, not just a meter, so the gap detector saw *normalised*
+    audio -- a quiet file was boosted on the way through and its near-silent
+    stretches lifted above the threshold. Measured on this fixture: zero gaps
+    found the old way, one the new way. Quiet material is precisely where this
+    defect lives, so the miss was aimed at the worst possible population.
+    """
+    quiet_gap = FIXTURES / "quiet-gap.wav"
+    if not quiet_gap.exists():
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=5",
+            "-filter_complex",
+            "[0]volume=-40dB[a];[1]volume=-70dB[b];[a][b]concat=n=2:v=0:a=1",
+            str(quiet_gap),
+        )
+    assert "of silence starting at" in raises(assert_no_dead_air, quiet_gap)
+
+
 # --- speaker: the wrong-face-for-a-whole-module defect ----------------------
 
 ROSTER = ["Alex", "Jordan", "Sam"]

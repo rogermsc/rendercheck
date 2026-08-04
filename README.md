@@ -53,6 +53,9 @@ pip install git+https://github.com/rogermsc/rendercheck   # PyPI release pending
 rendercheck demo
 ```
 
+Or drop a file into the **[playground](https://rogermsc.github.io/rendercheck/playground/)**
+— same checks, running on ffmpeg compiled to WebAssembly, nothing uploaded.
+
 `demo` synthesises five defective files and runs the real checks against them,
 so you can see it fire without owning a broken render. Verbatim, first two of
 five:
