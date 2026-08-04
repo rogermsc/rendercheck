@@ -33,9 +33,24 @@ next to correctly-levelled audio cut alongside it: episode-12.mp3
 
 ## What it checks
 
-`assert_has_sound`, `assert_no_dead_air`, `assert_no_truncation` and
-`assert_no_clipping` on every case, plus `assert_pace` when the test supplies a
-`script` var to time the delivery against.
+`assert_has_sound`, `assert_loudness`, `assert_true_peak`, `assert_no_dead_air`,
+`assert_no_truncation` and `assert_no_clipping` on every case.
 
-Edit `rendercheck_assert.py` to change the set or the thresholds — it is thirty
+Three vars turn on the rest:
+
+```yaml
+tests:
+  - vars:
+      script: "The full narration text, or a path to a .vtt"   # assert_pace
+      captions: episode-12.vtt                                 # assert_captions_aligned
+      preset: podcast                                          # -16 LUFS, -1 dBTP
+```
+
+`captions` is optional even when you want the check: a `.vtt` or `.srt` sitting
+beside the media under the same name is found automatically. `preset` is any
+name from `rendercheck presets` — `youtube`, `spotify`, `tiktok`, `podcast`,
+`apple`, `web`, `ebu`, `atsc`, `netflix` — and a name that does not exist is
+graded as a failure saying so, rather than quietly falling back to a default.
+
+Edit `rendercheck_assert.py` to change the set or the thresholds — it is fifty
 lines, and it is meant to be edited rather than configured.

@@ -24,6 +24,18 @@ _SELF_INTRO = re.compile(r"\b(?:I'm|I am|My name is)\s+([A-Z][a-z]+)")
 # in one, so a non-existent path with one of these is a typo worth raising on.
 _SCRIPT_SUFFIXES = {".vtt", ".srt", ".txt", ".md", ".json", ".text"}
 
+CAPTION_SUFFIXES = (".vtt", ".srt")
+"""Caption formats we can read timings out of, most preferred first."""
+
+# `00:01:02.500 --> 00:01:05.000`, with hours optional and either separator.
+# VTT allows cue settings after the end time (`align:start position:50%`), so
+# the tail is deliberately unanchored.
+_CUE_RANGE = re.compile(
+    r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})"
+    r"\s*-->\s*"
+    r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})"
+)
+
 
 def _strip_cues(text: str) -> str:
     kept = [line for line in text.splitlines() if not _CUE_LINE.search(line)]
@@ -56,6 +68,56 @@ def read_script(script: str | Path) -> str:
         return text
     text = path.read_text(encoding="utf-8", errors="replace")
     return _strip_cues(text) if path.suffix.lower() in (".vtt", ".srt") else text
+
+
+def read_cues(captions: str | Path) -> list[tuple[float, float]]:
+    """`(start, end)` in seconds for every cue in a .vtt or .srt.
+
+    `read_script` throws these timings away on purpose -- it wants the words. The
+    timings are the other half of the file, and the only way to ask whether the
+    captions describe the audio they ship next to.
+
+    Returns them in file order. Malformed rows are skipped rather than raised on:
+    a caption file with one bad line still has plenty to align against, and
+    refusing to look at any of it would be the less useful answer.
+    """
+    path = Path(captions)
+    if not path.is_file():
+        raise FileNotFoundError(f"no such caption file: {captions}")
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    cues = []
+    for row in _CUE_RANGE.finditer(text):
+        start = _clock(*row.group(1, 2, 3, 4))
+        end = _clock(*row.group(5, 6, 7, 8))
+        if end > start:
+            cues.append((start, end))
+    return cues
+
+
+def _clock(hours: str | None, minutes: str, seconds: str, fraction: str) -> float:
+    # `.5` and `.500` both mean half a second; pad rather than divide by a
+    # power that depends on how many digits the writer felt like emitting.
+    return (
+        int(hours or 0) * 3600
+        + int(minutes) * 60
+        + int(seconds)
+        + int(fraction.ljust(3, "0")) / 1000
+    )
+
+
+def find_captions(media: str | Path) -> Path | None:
+    """A caption file sitting next to `media` under the same stem, if there is one.
+
+    Sidecar captions are named after their media -- `lesson-1.mp4` beside
+    `lesson-1.vtt` -- so the common case needs no flag at all.
+    """
+    stem = Path(media)
+    for suffix in CAPTION_SUFFIXES:
+        beside = stem.with_suffix(suffix)
+        if beside.is_file():
+            return beside
+    return None
 
 
 def assert_speaker(

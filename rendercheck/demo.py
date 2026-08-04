@@ -69,12 +69,61 @@ def _narration(words: int, dest: Path) -> None:
     )
 
 
+# Where someone is talking in the speech fixture. Irregular on purpose: an even
+# rhythm slides onto itself, and a caption file could be a beat out and still
+# look like a perfect fit. Every gap is kept under three seconds so this file
+# demonstrates one defect rather than also tripping the dead-air check -- the
+# point of the case is the captions.
+_BURSTS = [(1.0, 4.0), (7.0, 3.5), (13.0, 5.0), (20.0, 3.5), (26.0, 6.0), (34.0, 4.0)]
+_SPEECH_SECONDS = 40.0
+
+
+def _speech(dest: Path) -> None:
+    """A tone gated into sentence-shaped bursts.
+
+    The caption check matches the *shape* of the talking against the shape of
+    the cues, so the fixture needs speech and silence in a recognisable pattern.
+    A continuous tone would be unalignable -- which is a real case, and one the
+    check skips rather than guesses at.
+    """
+    talking = "+".join(f"between(t,{s},{s + d})" for s, d in _BURSTS)
+    _ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=300:duration={_SPEECH_SECONDS:g}",
+        "-af",
+        f"volume=0:enable='not({talking})',"
+        f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+        f"afade=t=out:st={_SPEECH_SECONDS - 0.4:g}:d=0.4",
+        str(dest),
+    )
+
+
+def _cues(dest: Path, shift: float) -> None:
+    """Captions for the speech fixture, `shift` seconds off where they belong."""
+
+    def stamp(at: float) -> str:
+        minutes, seconds = divmod(max(at, 0.0), 60)
+        return f"00:{int(minutes):02d}:{seconds:06.3f}"
+
+    rows = ["WEBVTT", ""]
+    for index, (start, length) in enumerate(_BURSTS, 1):
+        rows += [
+            str(index),
+            f"{stamp(start + shift)} --> {stamp(start + length + shift)}",
+            f"Line {index} of the narration.",
+            "",
+        ]
+    dest.write_text("\n".join(rows))
+
+
 def build() -> list[Case]:
     """Generate every defect once, and describe what each one demonstrates."""
     dest = directory()
     dest.mkdir(exist_ok=True)
 
-    fast, quiet, dropout, silent, truncated, cutoff = (
+    fast, quiet, dropout, silent, truncated, cutoff, late, short = (
         dest / n
         for n in (
             "machine-gun.wav",
@@ -83,9 +132,13 @@ def build() -> list[Case]:
             "silent-video.mp4",
             "truncated.wav",
             "cut-off.wav",
+            "late-captions.wav",
+            "audio-runs-out.mp4",
         )
     )
     script = dest / "narration.vtt"
+    # Named after its media, which is how the check finds it with no flag.
+    late_cues = late.with_suffix(".vtt")
 
     if not fast.exists():
         _sine(60, -16, fast)
@@ -139,6 +192,35 @@ def build() -> list[Case]:
         # Stops dead at full level -- no decay, no trailing silence. This is
         # what a dropped final sentence leaves behind.
         _sine(6, -16, cutoff, ends_cleanly=False)
+    if not late.exists():
+        _speech(late)
+    if not late_cues.exists():
+        _cues(late_cues, shift=3.0)
+    if not short.exists():
+        # Eight seconds of picture, five of sound. What a mux that ran out of
+        # one input leaves behind: a valid file, the right length, and nothing
+        # to hear after the five-second mark.
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=5",
+            "-t",
+            "8",
+            "-pix_fmt",
+            "yuv420p",
+            # Levelled like everything else here, so the only thing wrong with
+            # this file is the one thing it is meant to show.
+            "-filter:a",
+            "loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st=4.6:d=0.4",
+            "-c:a",
+            "aac",
+            str(short),
+        )
 
     return [
         Case(
@@ -182,5 +264,19 @@ def build() -> list[Case]:
             "length. Retries only re-ran the ones that had errored; this hadn't.",
             truncated,
             ["--expect-seconds", "24"],
+        ),
+        Case(
+            "Captions against the wrong clock",
+            "A concatenation added three seconds of pre-roll after the captions "
+            "were written. Both files are perfectly valid on their own.",
+            late,
+            [],
+        ),
+        Case(
+            "The sound runs out before the picture",
+            "A mux ran out of one of its inputs. Right length, valid container, "
+            "and the last three seconds have nothing to hear.",
+            short,
+            [],
         ),
     ]

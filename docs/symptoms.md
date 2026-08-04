@@ -108,6 +108,91 @@ For **recorded** audio rather than synthesised, raise `--silence-threshold`:
 real rooms have a noise floor well above −50 dB, so a recorded track may never
 register as silent at the default.
 
+## "My subtitles are a few seconds out of sync"
+
+The captions were written against one version of the audio and the audio that
+shipped is a different one — a concatenation added a pre-roll, a leading breath
+got trimmed, a segment was re-cut. Both files are individually valid, which is
+why nothing else catches it.
+
+```bash
+rendercheck check lesson.mp4 --captions lesson.vtt
+```
+
+```
+FAIL  captions  lesson.vtt runs 3.0s late against lesson.mp4, past the 0.75s
+limit -- every line arrives at the wrong moment, and both files are individually
+valid so nothing else catches it
+```
+
+`--captions` is optional: a `.vtt` or `.srt` sitting beside the media under the
+same name is found automatically.
+
+**Offset and drift are reported separately**, because they are different bugs. A
+constant offset is one shift away from correct — [ffsubsync] will fix it for
+you. Drift means the two were timed against different clocks, and no single
+shift corrects it; the captions have to be regenerated from the audio that
+actually shipped.
+
+This check needs the audio to have some silence structure to match against. A
+music bed, or wall-to-wall speech with no pauses, gives nothing to line up — and
+it **skips** there rather than guessing, so a `SKIP` on this line means "could
+not tell", never "fine".
+
+[ffsubsync]: https://github.com/smacke/ffsubsync
+
+## "The audio ends before the video does"
+
+A mux ran out of one of its inputs. The file is valid, the overall duration is
+right, and the last stretch has nothing to hear.
+
+```bash
+rendercheck check clip.mp4
+```
+
+```
+FAIL  streams  clip.mp4 runs 8.0s of picture against 5.0s of sound -- sound
+stops 3.0s early (limit 0.5s). A mux that ran out of one input produces exactly
+this: a valid file, correct overall length, and 5.0s in, nothing there
+```
+
+The same check catches the opposite case — streams that do not *start* together,
+which is a file out of sync from its first frame. It costs one `ffprobe` call
+and no decoding at all, so there is no reason to switch it off.
+
+Some containers (Matroska especially) declare no per-stream duration. The check
+skips there rather than comparing against a number it invented.
+
+## "What LUFS should this be for YouTube?"
+
+There is no single answer, which is why this is a preset rather than a default:
+
+```bash
+rendercheck check episode.wav --preset youtube    # -14 LUFS, -1 dBTP
+rendercheck check episode.wav --preset podcast    # -16 LUFS
+rendercheck check episode.wav --preset ebu        # -23 LUFS, broadcast
+rendercheck presets                               # the whole table, with sources
+```
+
+A preset also switches on the **true-peak** check, which catches the master that
+measures clean on your machine and distorts after upload — a lossy encoder
+reconstructs the waveform between samples, and clips wherever that goes over.
+That is why every platform states a ceiling below 0 dBTP rather than at it.
+
+## "The render came out at the wrong size or frame rate"
+
+A generation step fell back to a smaller size, or a render came out at 25 fps
+for a 30 fps timeline. Valid file, wrong everywhere it is used.
+
+```bash
+rendercheck check clip.mp4 --expect-width 1920 --expect-height 1080 --expect-fps 30
+```
+
+Passing `--expect-fps` also catches **variable frame rate** — a file whose
+nominal and average rates disagree. That is one of the standard reasons audio
+drifts against picture once an editor that assumes a constant rate gets hold
+of it.
+
 ## "The generated video goes black partway through"
 
 Generation truncates to black rather than erroring. The container is valid and

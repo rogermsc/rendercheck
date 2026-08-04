@@ -18,11 +18,13 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
-from . import __version__, _ffmpeg, demo
+from . import __version__, _ffmpeg, config, demo, presets
 from ._core import SilentFail, Skipped
 from ._ffmpeg import ToolUnavailable
 from .media import (
+    assert_captions_aligned,
     assert_duration,
+    assert_format,
     assert_has_sound,
     assert_loudness,
     assert_no_black_frames,
@@ -31,8 +33,10 @@ from .media import (
     assert_no_truncation,
     assert_not_frozen,
     assert_pace,
+    assert_streams_aligned,
+    assert_true_peak,
 )
-from .text import assert_speaker
+from .text import assert_speaker, find_captions
 from .vision import looks_ok
 
 _IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -52,12 +56,15 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 _UNITS = {
     "pace": "WPM",
     "loudness": "LUFS",
+    "true peak": "dBTP",
     "duration": "s",
     "dead air": "s silence",
     "truncation": "dB of fall-off at the end",
     "clipping": "samples at 0 dBFS",
     "black frames": "s black",
     "frozen": "s frozen",
+    "captions": "s offset",
+    "streams": "s between stream endings",
 }
 
 
@@ -171,6 +178,14 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
                 tol=args.loudness_tol,
             ),
         )
+        # Only when a ceiling was actually asked for. There is no universal
+        # true-peak limit -- it belongs to wherever the file is going -- and
+        # inventing one would start failing files that were fine yesterday.
+        if args.max_true_peak is not None:
+            yield Planned(
+                "true peak",
+                partial(assert_true_peak, path, max_dbtp=args.max_true_peak),
+            )
         yield Planned(
             "dead air",
             partial(
@@ -188,6 +203,20 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
             "clipping",
             partial(assert_no_clipping, path, max_clipped_samples=args.max_clipped),
         )
+        # Sidecar captions are named after their media, so the common case needs
+        # no flag. An explicit --captions always wins over what is lying around.
+        beside = Path(args.captions) if args.captions else find_captions(path)
+        if beside:
+            yield Planned(
+                "captions",
+                partial(
+                    assert_captions_aligned,
+                    path,
+                    beside,
+                    max_offset=args.max_caption_offset,
+                    max_drift=args.max_caption_drift,
+                ),
+            )
     if args.expect_seconds:
         yield Planned(
             "duration",
@@ -208,6 +237,26 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
         yield Planned(
             "frozen", partial(assert_not_frozen, path, max_seconds=args.max_freeze)
         )
+        yield Planned(
+            "streams",
+            partial(
+                assert_streams_aligned,
+                path,
+                max_gap=args.max_stream_gap,
+                max_start_skew=args.max_start_skew,
+            ),
+        )
+        if args.expect_width or args.expect_height or args.expect_fps:
+            yield Planned(
+                "format",
+                partial(
+                    assert_format,
+                    path,
+                    width=args.expect_width,
+                    height=args.expect_height,
+                    fps=args.expect_fps,
+                ),
+            )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -217,8 +266,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=["check", "demo"],
-        help="check a file, or demo the checks on media generated for the purpose",
+        choices=["check", "demo", "presets", "mcp"],
+        help=(
+            "check a file, demo the checks on media generated for the purpose, "
+            "list the loudness presets, or serve them over MCP"
+        ),
     )
     parser.add_argument(
         "file",
@@ -248,8 +300,21 @@ def _parser() -> argparse.ArgumentParser:
         help="plain-English claims an image must satisfy",
     )
     parser.add_argument(
+        "--captions",
+        help="a .vtt or .srt to check against the audio; found beside the media "
+        "by default",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=sorted(presets.PRESETS),
+        help="loudness target for where this is going -- see `rendercheck presets`",
+    )
+    parser.add_argument(
         "--expect-seconds", type=float, help="expected duration, in seconds"
     )
+    parser.add_argument("--expect-width", type=int, help="expected picture width")
+    parser.add_argument("--expect-height", type=int, help="expected picture height")
+    parser.add_argument("--expect-fps", type=float, help="expected frame rate")
     parser.add_argument(
         "--max-wpm", type=float, default=245.0, help="fastest acceptable narration"
     )
@@ -261,6 +326,35 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--loudness-tol", type=float, default=2.0, help="allowed dB either side"
+    )
+    parser.add_argument(
+        "--max-true-peak",
+        type=float,
+        help="true-peak ceiling in dBTP; off unless given or implied by --preset",
+    )
+    parser.add_argument(
+        "--max-caption-offset",
+        type=float,
+        default=0.75,
+        help="seconds the captions may sit away from the speech",
+    )
+    parser.add_argument(
+        "--max-caption-drift",
+        type=float,
+        default=1.0,
+        help="seconds that offset may change between the file's start and end",
+    )
+    parser.add_argument(
+        "--max-stream-gap",
+        type=float,
+        default=0.5,
+        help="seconds sound and picture may differ in length",
+    )
+    parser.add_argument(
+        "--max-start-skew",
+        type=float,
+        default=0.25,
+        help="seconds sound and picture may differ in where they start",
     )
     parser.add_argument(
         "--max-silence", type=float, default=3.0, help="longest acceptable gap"
@@ -308,6 +402,41 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse(
+    argv: Sequence[str] | None, *, use_config: bool = True
+) -> argparse.Namespace:
+    """Parse, layering the config file and then the preset under the flags.
+
+    Both go in as `set_defaults` before the real parse, so an explicit
+    `--target-lufs` still beats `--preset youtube`, which in turn beats whatever
+    `rendercheck.toml` said. A flag someone typed is a decision; the rest are
+    starting points.
+
+    `use_config=False` is for the demo, whose output has to be the same
+    everywhere -- a threshold from the reader's own project would quietly change
+    what the demo claims to prove.
+    """
+    parser = _parser()
+    if use_config:
+        # The set of settings that exist, taken from a throwaway parse: argparse
+        # has no public way to enumerate destinations, and knowing them is what
+        # lets a typo'd key in the config be reported rather than ignored.
+        known = set(vars(parser.parse_known_args(["check"])[0]))
+        settings = config.load(known=known)
+        if settings:
+            parser.set_defaults(**settings)
+
+    sniffed, _ = parser.parse_known_args(argv)
+    if sniffed.preset:
+        preset = presets.get(sniffed.preset)
+        parser.set_defaults(
+            target_lufs=preset.target_lufs,
+            loudness_tol=preset.tol,
+            max_true_peak=preset.max_true_peak,
+        )
+    return parser.parse_args(argv)
+
+
 _COLOURS = {PASS: "\033[32m", FAIL: "\033[31m", SKIP: "\033[33m"}
 _RESET = "\033[0m"
 
@@ -351,7 +480,7 @@ def _demo() -> int:
     try:
         for case in cases:
             argv = ["check", case.path.name, *case.args]
-            args = _parser().parse_args(argv)
+            args = _parse(argv, use_config=False)
             print(f"{bold}{case.title}{plain}")
             print(f"  {case.story}")
             print(f"\n  $ rendercheck {' '.join(argv)}\n")
@@ -420,9 +549,22 @@ def _verdict(results: list[Result], strict: bool) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = _parse(argv)
     if args.command == "demo":
         return _demo()
+    if args.command == "presets":
+        print("Loudness targets, by where the file is going.\n")
+        print(presets.table())
+        print(
+            f"\n  rendercheck check narration.wav --preset youtube\n\n"
+            f"Without one, the target is {presets.get(presets.DEFAULT).target_lufs:g} "
+            f"LUFS -- the `{presets.DEFAULT}` row."
+        )
+        return EXIT_OK
+    if args.command == "mcp":
+        from .mcp import serve
+
+        return serve()
     if not args.file:
         print("rendercheck: check needs at least one file", file=sys.stderr)
         return EXIT_USAGE

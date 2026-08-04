@@ -122,6 +122,32 @@
       .plate .small { margin-top: 8px; color: var(--muted); font-size: 13.5px; }
       .plate input { display: none; }
 
+      /* The one dial on the instrument: everything else here is a fixed
+         threshold, but "how loud should this be" genuinely depends on where the
+         file is going. */
+      .knob {
+        margin-top: 16px;
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 10px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .knob label { font-weight: 600; color: var(--ink); }
+      .knob select {
+        font: inherit;
+        font-size: 13px;
+        color: var(--ink);
+        background: #fff;
+        border: 1px solid var(--rule);
+        border-bottom-width: 2px;
+        border-radius: 3px;
+        padding: 4px 8px;
+      }
+      .knob select:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+      .knob .note { flex: 1 1 100%; font-size: 12.5px; }
+
       .privacy {
         margin-top: 14px;
         font-size: 13px;
@@ -293,6 +319,22 @@
         <input type="file" id="picker" accept="audio/*,video/*" />
       </div>
 
+      <p class="knob">
+        <label for="preset">Where is this file going?</label>
+        <select id="preset">
+          <option value="web" selected>web video &mdash; &minus;16 LUFS</option>
+          <option value="youtube">YouTube &mdash; &minus;14 LUFS</option>
+          <option value="spotify">Spotify &mdash; &minus;14 LUFS</option>
+          <option value="tiktok">TikTok / Instagram &mdash; &minus;14 LUFS</option>
+          <option value="podcast">podcast &mdash; &minus;16 LUFS</option>
+          <option value="apple">Apple Music &mdash; &minus;16 LUFS</option>
+          <option value="ebu">EBU R128 broadcast &mdash; &minus;23 LUFS</option>
+          <option value="atsc">ATSC A/85 broadcast &mdash; &minus;24 LUFS</option>
+          <option value="netflix">Netflix &mdash; &minus;27 LUFS</option>
+        </select>
+        <span class="note" id="preset-note"></span>
+      </p>
+
       <p class="privacy">
         <b>&#9679;</b>
         <span>
@@ -384,10 +426,25 @@
         return URL.createObjectURL(new Blob([await response.arrayBuffer()], { type }));
       }
 
+      // The same table as `rendercheck presets`. Kept in sync by hand, which is
+      // acceptable only because these are published platform figures rather
+      // than anything this project decides.
+      const PRESETS = {
+        youtube: [-14, 1, "YouTube normalises playback to -14 LUFS"],
+        spotify: [-14, 1, "Spotify, including podcasts, at -14 LUFS"],
+        tiktok: [-14, 1.5, "TikTok and Instagram, measured rather than published"],
+        podcast: [-16, 1, "AES71 / Apple Podcasts: -16 LUFS stereo"],
+        apple: [-16, 1, "Apple Music Sound Check"],
+        web: [-16, 2, "spoken-word web video -- the default"],
+        ebu: [-23, 1, "EBU R128, European broadcast"],
+        atsc: [-24, 2, "ATSC A/85, North American broadcast"],
+        netflix: [-27, 2, "Netflix delivery, dialog-gated"],
+      };
+
       // Thresholds, kept identical to the Python defaults.
       const MAX_WPM = 245;
-      const TARGET_LUFS = -16;
-      const LOUDNESS_TOL = 2;
+      let TARGET_LUFS = -16;
+      let LOUDNESS_TOL = 2;
       const MAX_SILENCE = 3;
       const SILENCE_DB = -50;
       const MIN_TAIL_DROP = 6;
@@ -615,6 +672,7 @@
       async function handle(file) {
         if (busy) return;
         busy = true;
+        lastFile = file;
         plate.setAttribute("aria-disabled", "true");
         plateBig.textContent = file.name;
         plateSmall.textContent = `${(file.size / 1048576).toFixed(1)} MB`;
@@ -647,6 +705,24 @@
           plate.removeAttribute("aria-disabled");
         }
       }
+
+      const presetEl = document.getElementById("preset");
+      const presetNote = document.getElementById("preset-note");
+      let lastFile = null;
+
+      function applyPreset() {
+        const [target, tol, note] = PRESETS[presetEl.value];
+        TARGET_LUFS = target;
+        LOUDNESS_TOL = tol;
+        presetNote.textContent = `${note}. On the CLI: --preset ${presetEl.value}`;
+      }
+      // Re-runs against the file already on screen rather than making the
+      // reader drag it in again: the whole point of the dial is comparing.
+      presetEl.addEventListener("change", () => {
+        applyPreset();
+        if (lastFile && !busy) handle(lastFile);
+      });
+      applyPreset();
 
       plate.addEventListener("click", () => !busy && picker.click());
       plate.addEventListener("keydown", (e) => {

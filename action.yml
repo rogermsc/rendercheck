@@ -12,6 +12,13 @@ inputs:
     description: Treat a check that could not run as a failure.
     required: false
     default: "false"
+  preset:
+    description: >-
+      Loudness target for where these files are going: youtube, spotify, tiktok,
+      podcast, apple, web, ebu, atsc, or netflix. Run `rendercheck presets` for
+      the table. Also switches on the true-peak check.
+    required: false
+    default: ""
   version:
     description: Version of rendercheck to install. Defaults to the latest release.
     required: false
@@ -57,8 +64,10 @@ runs:
       env:
         FILES: ${{ inputs.files }}
         STRICT: ${{ inputs.strict }}
+        PRESET: ${{ inputs.preset }}
         EXTRA: ${{ inputs.args }}
       run: |
         flags=""
         [ "$STRICT" = "true" ] && flags="--strict"
+        [ -n "$PRESET" ] && flags="$flags --preset $PRESET"
         rendercheck check $FILES $flags $EXTRA
