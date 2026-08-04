@@ -22,8 +22,12 @@ from rendercheck import (
     SilentFail,
     Skipped,
     assert_duration,
+    assert_has_sound,
     assert_loudness,
+    assert_no_black_frames,
+    assert_no_clipping,
     assert_no_dead_air,
+    assert_no_truncation,
     assert_pace,
     assert_speaker,
 )
@@ -53,13 +57,16 @@ def build_fixtures():
         # Video with no audio track at all — not a silent track, no track.
         _ffmpeg("-f", "lavfi", "-i", "color=c=blue:s=320x240", "-t", "5", str(noaudio))
     if not tone.exists():
+        # Fades out over its last 0.4s. This is the "clean audio" fixture, and
+        # audio that stops dead at full level is not clean -- it is what a
+        # truncated render looks like, and assert_no_truncation says so.
         _ffmpeg(
             "-f",
             "lavfi",
             "-i",
             "sine=frequency=440:duration=10",
             "-af",
-            "loudnorm=I=-16:TP=-1.5:LRA=11",
+            "loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st=9.6:d=0.4",
             str(tone),
         )
     if not quiet.exists():
@@ -210,6 +217,93 @@ def test_speaker_requires_a_roster():
         assert "roster" in str(exc)
     else:
         raise AssertionError("an empty roster must be rejected, not silently trusted")
+
+
+# --- the wider set: truncation, clipping, black, frozen --------------------
+
+
+def _cutoff() -> Path:
+    """Audio that stops dead at full level, with no decay and no trailing gap."""
+    path = FIXTURES / "cutoff.wav"
+    if not path.exists():
+        _ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=5", str(path))
+    return path
+
+
+def _clipped() -> Path:
+    path = FIXTURES / "clipped.wav"
+    if not path.exists():
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=3",
+            "-af",
+            "volume=20dB",
+            str(path),
+        )
+    return path
+
+
+def _blackvideo() -> Path:
+    """Moving picture, then three seconds of nothing."""
+    path = FIXTURES / "goesblack.mp4"
+    if not path.exists():
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=3:size=320x240:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x240:d=3:r=10",
+            "-filter_complex",
+            "[0][1]concat=n=2:v=1:a=0",
+            "-pix_fmt",
+            "yuv420p",
+            str(path),
+        )
+    return path
+
+
+def test_truncation_flags_audio_that_stops_at_full_level():
+    assert "was cut rather than finished" in raises(assert_no_truncation, _cutoff())
+
+
+def test_truncation_accepts_audio_that_was_allowed_to_finish():
+    # Measured against the file's own average, so this holds for quiet content
+    # as well as loud -- TONE fades out over its last 0.4s.
+    assert measured(assert_no_truncation(TONE)) >= 6.0
+
+
+def test_clipping_flags_a_flattened_waveform():
+    assert "pinned at 0 dBFS" in raises(assert_no_clipping, _clipped())
+
+
+def test_clipping_accepts_a_clean_mix():
+    assert assert_no_clipping(TONE) == 0
+
+
+def test_black_frames_flag_a_render_that_stopped_producing_picture():
+    assert "solid black" in raises(assert_no_black_frames, _blackvideo())
+
+
+def test_video_checks_skip_a_file_with_no_picture_rather_than_passing_it():
+    # The lesson from the missing-audio-track regression, applied to video:
+    # blackdetect on a .wav reports nothing, and nothing must not read as clean.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", Skipped)
+        assert assert_no_black_frames(TONE) is None
+    assert any("no video stream" in str(w.message) for w in caught), caught
+
+
+def test_a_missing_audio_track_is_not_reported_as_mere_quiet():
+    assert "no audio stream at all" in raises(assert_has_sound, NOAUDIO)
+
+
+def test_has_sound_flags_an_all_zero_track():
+    assert "every sample in it is zero" in raises(assert_has_sound, SILENCE)
 
 
 def test_a_typod_script_path_is_not_read_as_narration():

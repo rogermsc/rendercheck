@@ -21,7 +21,17 @@ warns and passes rather than blocking your pipeline on its own breakage.
 """
 
 from ._core import SilentFail, Skipped
-from .media import assert_duration, assert_loudness, assert_no_dead_air, assert_pace
+from .media import (
+    assert_duration,
+    assert_has_sound,
+    assert_loudness,
+    assert_no_black_frames,
+    assert_no_clipping,
+    assert_no_dead_air,
+    assert_no_truncation,
+    assert_not_frozen,
+    assert_pace,
+)
 from .text import assert_speaker
 from .vision import looks_ok
 
@@ -31,8 +41,13 @@ __all__ = [
     "SilentFail",
     "Skipped",
     "assert_duration",
+    "assert_has_sound",
     "assert_loudness",
+    "assert_no_black_frames",
+    "assert_no_clipping",
     "assert_no_dead_air",
+    "assert_no_truncation",
+    "assert_not_frozen",
     "assert_pace",
     "assert_speaker",
     "looks_ok",

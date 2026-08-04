@@ -36,14 +36,24 @@ def _ffmpeg(*args: str) -> None:
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args], check=True)
 
 
-def _sine(seconds: float, lufs: float, dest: Path) -> None:
+def _sine(
+    seconds: float, lufs: float, dest: Path, *, ends_cleanly: bool = True
+) -> None:
+    """A tone at a known loudness.
+
+    `ends_cleanly` fades the last moment out. Without it the file stops at full
+    level, which is itself a defect (see the truncation case) -- so every file
+    that is meant to demonstrate something *else* has to end properly, or it
+    would fail two checks and muddle the point.
+    """
+    fade = f",afade=t=out:st={seconds - 0.4:g}:d=0.4" if ends_cleanly else ""
     _ffmpeg(
         "-f",
         "lavfi",
         "-i",
         f"sine=frequency=440:duration={seconds}",
         "-af",
-        f"loudnorm=I={lufs}:TP=-1.5:LRA=11",
+        f"loudnorm=I={lufs}:TP=-1.5:LRA=11{fade}",
         str(dest),
     )
 
@@ -64,7 +74,7 @@ def build() -> list[Case]:
     dest = directory()
     dest.mkdir(exist_ok=True)
 
-    fast, quiet, dropout, silent, truncated = (
+    fast, quiet, dropout, silent, truncated, cutoff = (
         dest / n
         for n in (
             "machine-gun.wav",
@@ -72,6 +82,7 @@ def build() -> list[Case]:
             "dropout.wav",
             "silent-video.mp4",
             "truncated.wav",
+            "cut-off.wav",
         )
     )
     script = dest / "narration.vtt"
@@ -99,16 +110,35 @@ def build() -> list[Case]:
             "-i",
             "sine=frequency=440:duration=5",
             "-filter_complex",
-            "[0][1][2]concat=n=3:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11",
+            "[0][1][2]concat=n=3:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11,"
+            "afade=t=out:st=15.6:d=0.4",
             str(dropout),
         )
     if not silent.exists():
         # Video with no audio *track* -- not a silent track, no track. This is
         # what an upscale step that drops audio produces, and it is the defect
         # that reads as success in every pipeline that only checks for errors.
-        _ffmpeg("-f", "lavfi", "-i", "color=c=navy:s=320x240", "-t", "8", str(silent))
+        #
+        # A moving test pattern rather than a flat colour: the picture here is
+        # meant to be *fine*, and a still dark frame would trip blackdetect and
+        # freezedetect as well, which would blur what this case demonstrates.
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=10",
+            "-t",
+            "8",
+            "-pix_fmt",
+            "yuv420p",
+            str(silent),
+        )
     if not truncated.exists():
         _sine(10, -16, truncated)
+    if not cutoff.exists():
+        # Stops dead at full level -- no decay, no trailing silence. This is
+        # what a dropped final sentence leaves behind.
+        _sine(6, -16, cutoff, ends_cleanly=False)
 
     return [
         Case(
@@ -137,6 +167,13 @@ def build() -> list[Case]:
             "An upscale step dropped the audio track. The API returned success "
             "and the file plays -- in silence.",
             silent,
+            [],
+        ),
+        Case(
+            "The last sentence is missing",
+            "The most reported defect in generated speech: the audio stops "
+            "mid-thought and the API still returns success.",
+            cutoff,
             [],
         ),
         Case(

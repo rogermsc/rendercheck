@@ -196,3 +196,170 @@ def assert_no_dead_air(
         f"{max_silence:g}s limit -- a gap this long mid-file is a dropped "
         f"segment, not a pause ({len(gaps)} found in total): {media}"
     )
+
+
+def assert_has_sound(media: str | Path) -> float | None:
+    """The file plays sound at all.
+
+    Named separately because it is the defect people arrive searching for: a
+    generated clip that returns success and plays in silence. Upscaling steps
+    drop the audio track; muxes get pointed at the wrong stream; a failed
+    synthesis writes zeroes. `assert_loudness` catches both of these too -- this
+    is the same question without an opinion about the level.
+
+    Returns the measured loudness in LUFS, or None if unmeasurable.
+    """
+    existing(media)
+    try:
+        _require_audio(media)
+        loudness = _ffmpeg.measure(media).loudness
+    except ToolUnavailable as exc:
+        skip(f"has sound: {exc}")
+        return None
+    if loudness == float("-inf"):
+        raise SilentFail(
+            f"{media} carries an audio stream but every sample in it is zero -- "
+            f"it will play as silence, which is what a failed synthesis or a "
+            f"muted mix looks like from the outside"
+        )
+    return loudness
+
+
+def assert_no_truncation(
+    media: str | Path, *, tail_seconds: float = 0.25, min_drop_db: float = 6.0
+) -> float | None:
+    """Whether the audio was allowed to finish.
+
+    The most reported defect in generated speech: the final sentence is missing
+    and the API reported success anyway. Speech that finishes tails off -- into
+    a decay, or into the small silence a sentence end leaves behind. Speech that
+    was cut stops at full level.
+
+    Measured against the file's *own* average rather than a fixed dBFS line, so
+    it holds for quiet content and loud content alike. On real files the
+    separation is wide: an abrupt cut lands within a decibel of the average,
+    while a normal ending sits tens of decibels below it.
+
+    Returns how far the ending fell below the file's average, in dB (larger is
+    healthier), or None if unmeasurable. Lower `min_drop_db` for content that
+    legitimately ends hot, like a music bed or a hard cut to the next scene.
+    """
+    existing(media)
+    try:
+        _require_audio(media)
+        tail = _ffmpeg.tail_level(media, tail_seconds)
+        overall = _ffmpeg.volume(media).mean
+    except ToolUnavailable as exc:
+        skip(f"truncation: {exc}")
+        return None
+    drop = overall - tail
+    if drop < min_drop_db:
+        raise SilentFail(
+            f"{media} is still at its full average level {drop:.1f} dB into the "
+            f"final {tail_seconds:g}s (expected at least {min_drop_db:g} dB of "
+            f"fall-off) -- audio that stops flat was cut rather than finished, "
+            f"which is what a dropped last sentence looks like from outside"
+        )
+    return drop
+
+
+def assert_no_clipping(
+    media: str | Path, *, max_clipped_samples: int = 100
+) -> int | None:
+    """Samples pinned at full scale.
+
+    A gain stage somewhere in a TTS chain -- normalisation, a mix, a naive
+    volume bump -- pushes the waveform past what the format can represent. The
+    result is audible as crackle on consonants, and no amount of turning it
+    down afterwards recovers what was flattened.
+
+    Returns the number of clipped samples, or None if unmeasurable.
+    """
+    existing(media)
+    try:
+        _require_audio(media)
+        clipped = _ffmpeg.volume(media).clipped
+    except ToolUnavailable as exc:
+        skip(f"clipping: {exc}")
+        return None
+    if clipped > max_clipped_samples:
+        raise SilentFail(
+            f"{clipped} samples in {media} are pinned at 0 dBFS, past the "
+            f"{max_clipped_samples} allowed -- the waveform was flattened where "
+            f"it clipped, which crackles on consonants and cannot be undone by "
+            f"lowering the level afterwards"
+        )
+    return clipped
+
+
+def _require_video(media: str | Path, check: str) -> bool:
+    """Whether there is a picture to analyse. Skips (fails open) when there is not.
+
+    A file with no video stream is not evidence of a broken render -- it may
+    simply be audio. What matters is that the detectors are never *asked* about
+    a stream that isn't there: `blackdetect` on a .wav reports nothing, and
+    nothing would read as "no black frames found".
+    """
+    if not _ffmpeg.has_video(media):
+        skip(f"{check}: {media} has no video stream -- nothing to look at")
+        return False
+    return True
+
+
+def assert_no_black_frames(
+    media: str | Path, *, max_seconds: float = 1.0
+) -> float | None:
+    """Stretches where the picture is entirely black.
+
+    Generated video truncates to black rather than erroring: the clip is the
+    right length, the container is valid, and the last third is nothing.
+
+    Returns the longest black stretch in seconds (0.0 if none), or None if
+    unmeasurable.
+    """
+    existing(media)
+    try:
+        if not _require_video(media, "black frames"):
+            return None
+        blacks = _ffmpeg.measure_video(media, min_black=max_seconds).blacks
+    except ToolUnavailable as exc:
+        skip(f"black frames: {exc}")
+        return None
+    if not blacks:
+        return 0.0
+
+    start, length = max(blacks, key=lambda black: black[1])
+    raise SilentFail(
+        f"{length:.1f}s of solid black starting at {timestamp(start)} exceeds "
+        f"the {max_seconds:g}s limit -- a stretch this long is a render that "
+        f"stopped producing picture, not a transition ({len(blacks)} found in "
+        f"total): {media}"
+    )
+
+
+def assert_not_frozen(media: str | Path, *, max_seconds: float = 3.0) -> float | None:
+    """Stretches where the picture stops changing.
+
+    A frozen clip plays as a still photograph with sound over it. Nothing errors:
+    the frames are all there, and every one of them is the same frame.
+
+    Returns the longest frozen stretch in seconds (0.0 if none), or None if
+    unmeasurable. Raise `max_seconds` for content with legitimate held shots.
+    """
+    existing(media)
+    try:
+        if not _require_video(media, "frozen"):
+            return None
+        freezes = _ffmpeg.measure_video(media, min_freeze=max_seconds).freezes
+    except ToolUnavailable as exc:
+        skip(f"frozen: {exc}")
+        return None
+    if not freezes:
+        return 0.0
+
+    start, length = max(freezes, key=lambda freeze: freeze[1])
+    raise SilentFail(
+        f"the picture stops moving for {length:.1f}s at {timestamp(start)}, past "
+        f"the {max_seconds:g}s limit -- a generated clip that freezes is a failed "
+        f"render playing as a still, and it will not look intentional: {media}"
+    )

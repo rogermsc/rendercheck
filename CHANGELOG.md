@@ -28,6 +28,13 @@ name — it is still exactly what the exception means.
   actually assigned, gated on a roster so story characters don't trip it.
 - `looks_ok` — a rubric-driven vision check for defects only a person can see.
   Optional extra: `pip install "rendercheck[vision]"`.
+- `assert_no_truncation` — audio that stops at full level was cut, not finished.
+  Measured against the file's own average rather than a fixed threshold.
+- `assert_no_clipping` — samples pinned at full scale by a gain stage.
+- `assert_has_sound` — no audio stream, or a stream of pure zeroes.
+- `assert_no_black_frames` and `assert_not_frozen` — generated video that
+  truncates to black or holds a single frame. Both skip rather than pass when
+  there is no video stream to analyse.
 - `rendercheck check <file>`, with `--json` for calling from another pipeline.
 - `rendercheck demo` — synthesises five defective files with ffmpeg and runs the
   real checks against them. Every check here only fires on *broken* media, so

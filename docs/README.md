@@ -64,6 +64,47 @@ floor well above −50 dB, so a recorded track may never register as "silent". F
 synthesised speech, −50 is usually right. Raise `max_silence` for material with
 deliberate long pauses; lower it to around 1.5s to catch clipped joins.
 
+## `assert_no_truncation(media, *, tail_seconds=0.25, min_drop_db=6.0)`
+
+Whether the audio was allowed to finish. Speech that ends properly tails off,
+into a decay or into the small silence a sentence leaves behind; speech that was
+cut stops at full level.
+
+Measured against the file's **own average**, not a fixed dBFS line, so it works
+on quiet and loud content alike. The separation is wide in practice — an abrupt
+cut lands within a decibel of the average, a fade around 16 dB below it, a
+normal trailing silence 60 dB or more below. Lower `min_drop_db` for content
+that legitimately ends hot: a music bed, or a hard cut into the next scene.
+
+## `assert_no_clipping(media, *, max_clipped_samples=100)`
+
+Samples pinned at full scale, which is what a gain stage somewhere in a TTS
+chain leaves behind. Audible as crackle on consonants, and turning the file down
+afterwards does not recover what was flattened.
+
+## `assert_has_sound(media)`
+
+The file plays sound at all — no audio stream, or a stream of pure zeroes.
+`assert_loudness` catches both of these too; this is the same question without
+an opinion about the level, named for the way people arrive at it ("the clip
+came back silent").
+
+## `assert_no_black_frames(media, *, max_seconds=1.0)`
+
+Stretches where the picture is entirely black. Generated video truncates to
+black rather than erroring: right length, valid container, nothing in the last
+third.
+
+## `assert_not_frozen(media, *, max_seconds=3.0)`
+
+Stretches where the picture stops changing — a clip that plays as a still with
+sound over it. Every frame is present; every frame is the same frame. Raise
+`max_seconds` for content with deliberate held shots.
+
+Both video checks **skip** rather than pass when the file has no video stream.
+The detectors report findings, and a filter given nothing to analyse reports no
+findings — which would otherwise read as "looked, all clean".
+
 ## `assert_speaker(script, expected, known_names)`
 
 Scans the script for `I'm X` / `I am X` / `My name is X` and compares against

@@ -71,14 +71,15 @@ def duration(path: str | Path) -> float:
         raise ToolUnavailable(f"ffprobe read no duration from {path}") from None
 
 
-def has_audio(path: str | Path) -> bool:
-    """Whether the file carries at least one audio stream.
+def _has_stream(path: str | Path, kind: str) -> bool:
+    """Whether the file carries at least one stream of `kind` ('a' or 'v').
 
-    Load-bearing, not a convenience. `silencedetect` on a file with no audio
-    track reports nothing at all, which is indistinguishable from "no silence
-    found" -- so without this guard a video with the audio missing entirely
-    reads as clean. That is the exact failure mode this library exists to
-    catch, so every audio check asks this question first.
+    Load-bearing, not a convenience. Every detector here reports *findings*, and
+    a filter given nothing to analyse reports no findings -- which is
+    indistinguishable from "analysed it, all clean". `silencedetect` on a file
+    with no audio track says nothing; so does `blackdetect` on a .wav. Without
+    this guard the missing thing reads as the healthy thing, which is the exact
+    failure mode this library exists to catch.
     """
     proc = _run(
         "ffprobe",
@@ -86,7 +87,7 @@ def has_audio(path: str | Path) -> bool:
             "-v",
             "error",
             "-select_streams",
-            "a",
+            kind,
             "-show_entries",
             "stream=codec_type",
             "-of",
@@ -103,7 +104,132 @@ def has_audio(path: str | Path) -> bool:
             f"ffprobe could not read {path}: "
             f"{reported[-1] if reported else 'ffprobe gave no reason'}"
         )
-    return "audio" in proc.stdout
+    return proc.stdout.strip() != ""
+
+
+def has_audio(path: str | Path) -> bool:
+    """Whether the file carries at least one audio stream."""
+    return _has_stream(path, "a")
+
+
+def has_video(path: str | Path) -> bool:
+    """Whether the file carries at least one video stream."""
+    return _has_stream(path, "v")
+
+
+def tail_level(path: str | Path, seconds: float = 0.25) -> float:
+    """Mean volume of the final `seconds`, in dBFS.
+
+    Speech that was allowed to finish decays into near-silence. Speech that was
+    cut mid-word stops at full level, which is what this reads.
+    """
+    proc = _run(
+        "ffmpeg",
+        [
+            "-nostdin",
+            "-sseof",
+            f"-{seconds}",
+            "-i",
+            str(path),
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
+        ],
+    )
+    found = re.search(r"mean_volume: (-?[\d.]+) dB", proc.stderr)
+    if not found:
+        raise ToolUnavailable(f"volumedetect read no level from the end of {path}")
+    return float(found.group(1))
+
+
+class Volume(NamedTuple):
+    """Whole-file level readings, from one `volumedetect` pass."""
+
+    mean: float
+    """Mean volume over the whole file, in dBFS."""
+
+    clipped: int
+    """Samples sitting at full scale."""
+
+
+@lru_cache(maxsize=32)
+def _volume(fingerprint: tuple[str, int, int]) -> Volume:
+    path = fingerprint[0]
+    proc = _run(
+        "ffmpeg",
+        ["-nostdin", "-i", path, "-af", "volumedetect", "-f", "null", "-"],
+    )
+    mean = re.search(r"mean_volume: (-?[\d.]+) dB", proc.stderr)
+    if not mean:
+        raise ToolUnavailable(f"volumedetect measured nothing in {path}")
+    clipped = re.search(r"histogram_0db: (\d+)", proc.stderr)
+    # No histogram line at all means no samples reached 0 dBFS.
+    return Volume(
+        mean=float(mean.group(1)), clipped=int(clipped.group(1)) if clipped else 0
+    )
+
+
+def volume(path: str | Path) -> Volume:
+    """Mean level and clipped-sample count, memoised like `measure`."""
+    return _volume(_fingerprint(Path(path)))
+
+
+class VideoMeasurement(NamedTuple):
+    """One video decode's worth of readings."""
+
+    blacks: list[tuple[float, float]]
+    """`(start, duration)` of each all-black stretch."""
+
+    freezes: list[tuple[float, float]]
+    """`(start, duration)` of each stretch where the picture stopped moving."""
+
+
+@lru_cache(maxsize=32)
+def _measure_video(
+    fingerprint: tuple[str, int, int], min_black: float, min_freeze: float
+) -> VideoMeasurement:
+    path = fingerprint[0]
+    # Chained for the same reason the audio pair is: decoding is the cost.
+    proc = _run(
+        "ffmpeg",
+        [
+            "-nostdin",
+            "-i",
+            path,
+            "-vf",
+            f"blackdetect=d={min_black}:pic_th=0.98,"
+            f"freezedetect=n=-60dB:d={min_freeze}",
+            "-f",
+            "null",
+            "-",
+        ],
+    )
+    blacks = [
+        (float(start), float(length))
+        for start, length in re.findall(
+            r"black_start:(-?[\d.]+) black_end:[\d.]+ black_duration:([\d.]+)",
+            proc.stderr,
+        )
+    ]
+    freeze_starts = [
+        float(v) for v in re.findall(r"freeze_start: (-?[\d.]+)", proc.stderr)
+    ]
+    freeze_durations = [
+        float(v) for v in re.findall(r"freeze_duration: ([\d.]+)", proc.stderr)
+    ]
+    return VideoMeasurement(
+        blacks=blacks,
+        freezes=list(zip(freeze_starts, freeze_durations, strict=False)),
+    )
+
+
+def measure_video(
+    path: str | Path, *, min_black: float = 1.0, min_freeze: float = 3.0
+) -> VideoMeasurement:
+    """Read black and frozen stretches from one decode, memoised like `measure`."""
+    return _measure_video(_fingerprint(Path(path)), min_black, min_freeze)
 
 
 def _fingerprint(path: Path) -> tuple[str, int, int]:

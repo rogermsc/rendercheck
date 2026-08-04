@@ -17,13 +17,27 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
-from . import __version__, demo
+from . import __version__, _ffmpeg, demo
 from ._core import SilentFail, Skipped
-from .media import assert_duration, assert_loudness, assert_no_dead_air, assert_pace
+from ._ffmpeg import ToolUnavailable
+from .media import (
+    assert_duration,
+    assert_has_sound,
+    assert_loudness,
+    assert_no_black_frames,
+    assert_no_clipping,
+    assert_no_dead_air,
+    assert_no_truncation,
+    assert_not_frozen,
+    assert_pace,
+)
 from .text import assert_speaker
 from .vision import looks_ok
 
 _IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# Suffix rather than a probe: deciding what to plan should not cost a subprocess.
+# A video container with no picture still gets planned, and skips honestly.
+_VIDEOS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg"}
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
@@ -32,7 +46,16 @@ PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 # defect need different reactions.
 EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 
-_UNITS = {"pace": "WPM", "loudness": "LUFS", "duration": "s", "dead air": "s silence"}
+_UNITS = {
+    "pace": "WPM",
+    "loudness": "LUFS",
+    "duration": "s",
+    "dead air": "s silence",
+    "truncation": "dB of fall-off at the end",
+    "clipping": "samples at 0 dBFS",
+    "black frames": "s black",
+    "frozen": "s frozen",
+}
 
 
 class Planned(NamedTuple):
@@ -50,9 +73,15 @@ class Result(NamedTuple):
 
 
 def _measured(name: str, result: object) -> str:
-    if not isinstance(result, float) or name not in _UNITS:
+    if (
+        name not in _UNITS
+        or isinstance(result, bool)
+        or not isinstance(result, int | float)
+    ):
         return ""
-    return f"{result:.1f} {_UNITS[name]}"
+    # Counts are integers; everything else is a reading with a decimal place.
+    shown = f"{result}" if isinstance(result, int) else f"{result:.1f}"
+    return f"{shown} {_UNITS[name]}"
 
 
 def _run(planned: Planned) -> Result:
@@ -89,7 +118,17 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
             )
         return
 
-    if args.script:
+    # One probe up front, so a missing audio track is reported once instead of
+    # by every audio check in turn. Four copies of the same sentence bury
+    # whatever else is wrong with the file.
+    try:
+        audible = _ffmpeg.has_audio(path)
+    except ToolUnavailable:
+        audible = True  # cannot tell -- let each check speak for itself
+
+    if not audible:
+        yield Planned("has sound", partial(assert_has_sound, path))
+    elif args.script:
         yield Planned(
             "pace",
             partial(
@@ -119,21 +158,33 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
     else:
         yield Planned("pace", None, "no --script given")
 
-    yield Planned(
-        "loudness",
-        partial(
-            assert_loudness, path, target_lufs=args.target_lufs, tol=args.loudness_tol
-        ),
-    )
-    yield Planned(
-        "dead air",
-        partial(
-            assert_no_dead_air,
-            path,
-            max_silence=args.max_silence,
-            threshold_db=args.silence_threshold,
-        ),
-    )
+    if audible:
+        yield Planned(
+            "loudness",
+            partial(
+                assert_loudness,
+                path,
+                target_lufs=args.target_lufs,
+                tol=args.loudness_tol,
+            ),
+        )
+        yield Planned(
+            "dead air",
+            partial(
+                assert_no_dead_air,
+                path,
+                max_silence=args.max_silence,
+                threshold_db=args.silence_threshold,
+            ),
+        )
+        yield Planned(
+            "truncation",
+            partial(assert_no_truncation, path, min_drop_db=args.min_tail_drop),
+        )
+        yield Planned(
+            "clipping",
+            partial(assert_no_clipping, path, max_clipped_samples=args.max_clipped),
+        )
     if args.expect_seconds:
         yield Planned(
             "duration",
@@ -144,6 +195,15 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
                 tol=args.duration_tol,
                 min_ratio=args.min_ratio,
             ),
+        )
+
+    if path.suffix.lower() in _VIDEOS:
+        yield Planned(
+            "black frames",
+            partial(assert_no_black_frames, path, max_seconds=args.max_black),
+        )
+        yield Planned(
+            "frozen", partial(assert_not_frozen, path, max_seconds=args.max_freeze)
         )
 
 
@@ -209,6 +269,21 @@ def _parser() -> argparse.ArgumentParser:
         help="dB below which audio counts as silent; raise for recorded audio",
     )
     parser.add_argument(
+        "--min-tail-drop",
+        type=float,
+        default=6.0,
+        help="dB the ending must fall below the file's average; lower for music",
+    )
+    parser.add_argument(
+        "--max-clipped", type=int, default=100, help="samples allowed at full scale"
+    )
+    parser.add_argument(
+        "--max-black", type=float, default=1.0, help="longest acceptable black stretch"
+    )
+    parser.add_argument(
+        "--max-freeze", type=float, default=3.0, help="longest acceptable frozen shot"
+    )
+    parser.add_argument(
         "--duration-tol", type=float, default=0.5, help="allowed drift, in seconds"
     )
     parser.add_argument(
@@ -252,7 +327,7 @@ def _demo() -> int:
 
     bold, plain = ("\033[1m", "\033[0m") if sys.stdout.isatty() else ("", "")
     root = demo.directory()
-    print(f"Generated five defective files in {root}\n")
+    print(f"Generated {len(cases)} defective files in {root}\n")
 
     # Run from inside that directory so the failure messages name the file the
     # way the printed command does. An absolute temp path in every line buries
