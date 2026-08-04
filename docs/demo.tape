@@ -10,7 +10,7 @@ Output docs/demo.gif
 Set Shell bash
 Set FontSize 13
 Set Width 1500
-Set Height 760
+Set Height 900
 Set Padding 20
 Set Theme "Builtin Dark"
 Set TypingSpeed 45ms
@@ -21,7 +21,7 @@ Set PlaybackSpeed 1.0
 Hide
 Type "rendercheck demo > /dev/null 2>&1"
 Enter
-Sleep 12s
+Sleep 25s
 Type "clear"
 Enter
 Show
@@ -30,4 +30,4 @@ Sleep 800ms
 Type "rendercheck demo"
 Sleep 400ms
 Enter
-Sleep 9s
+Sleep 14s

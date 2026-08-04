@@ -86,6 +86,12 @@ files = ["rendercheck", "tests"]
 module = ["anthropic", "anthropic.*"]
 ignore_missing_imports = true
 
+# Checked against 3.10, where tomllib does not exist yet. The import sits behind
+# a version guard at runtime; this stops the type checker tripping over it.
+[[tool.mypy.overrides]]
+module = ["tomllib"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false

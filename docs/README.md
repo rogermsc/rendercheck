@@ -105,6 +105,73 @@ Both video checks **skip** rather than pass when the file has no video stream.
 The detectors report findings, and a filter given nothing to analyse reports no
 findings — which would otherwise read as "looked, all clean".
 
+## `assert_true_peak(media, *, max_dbtp=-1.0)`
+
+The highest inter-sample peak, in dBTP. Different from `assert_no_clipping`,
+which counts samples already flattened at full scale: true peak is what the
+waveform reaches *between* samples, so a file can measure under 0 dBFS
+everywhere and still clip once a lossy codec reconstructs it. The distortion
+appears on the platform's copy, not on yours.
+
+Read from the same decode as loudness, so it is free once that has run. Off by
+default on the command line — there is no universal ceiling — and switched on by
+`--preset` or `--max-true-peak`.
+
+## `assert_streams_aligned(media, *, max_gap=0.5, max_start_skew=0.25)`
+
+Whether sound and picture cover the same stretch of time. Two defects, one
+reading: a mux that ran out of one input leaves audio ending before the picture
+does, and a concatenation that mistimed its first segment leaves the streams
+starting at different points.
+
+A **container** check, not a perceptual one. It reads what the file declares
+about its own streams, in a single `ffprobe` call with no decoding, which makes
+it the cheapest thing here. It cannot see lip sync; what it can see is the much
+more common case where nothing lines up because the timings never did.
+
+Skips when the file has only one of the two, or when the container declares no
+per-stream duration — Matroska usually does not. Comparing against a number
+invented to fill the gap would be a confident wrong answer.
+
+## `assert_format(media, *, width=None, height=None, fps=None, fps_tol=0.01)`
+
+Checks only what you pass. A generation step that quietly fell back to 720p, or
+a render that came out at 25 fps for a 30 fps timeline, produces a valid file
+that is wrong everywhere it is used.
+
+Passing `fps` also catches **variable frame rate**: a file whose nominal
+(`r_frame_rate`) and average (`avg_frame_rate`) rates disagree plays at a rate
+that changes as it goes, which is a standard cause of audio drifting against
+picture in an editor that assumes constant rate.
+
+## `assert_captions_aligned(media, captions, *, max_offset=0.75, max_drift=1.0)`
+
+Whether the captions describe the audio they ship next to. Captions are written
+against one clock and the audio rendered against another — a concatenation adds
+a pre-roll, a segment is re-cut, an editor trims a leading breath — and both
+files remain individually perfect. Every other check here passes.
+
+**How it works.** Both sides become a coarse "is anyone talking now" track: the
+captions from their cue timings, the audio from where it is not silent
+(`silencedetect` at −40 dB). The two are slid against each other at 100 ms
+resolution to find the shift that fits best. The same approach [ffsubsync] uses
+to *correct* drift, reduced to what a pass/fail needs.
+
+**Offset and drift are separate findings**, and drift is reported first because
+it is the more specific one. An offset is a single shift from correct; drift
+means the two were timed against different clocks and no shift fixes it. A
+drifting file also has an average offset, so testing offset first would report
+the symptom and bury the cause.
+
+**It skips when no shift stands out.** Wall-to-wall speech, or a music bed, has
+no silence structure to match against, so every shift scores identically — and a
+naive implementation would read a confident zero offset off that flat curve and
+pass. `SKIP` here means "could not tell", never "fine".
+
+Returns the measured offset in seconds; positive means the captions run late.
+
+[ffsubsync]: https://github.com/smacke/ffsubsync
+
 ## `assert_speaker(script, expected, known_names)`
 
 Scans the script for `I'm X` / `I am X` / `My name is X` and compares against
@@ -165,9 +232,11 @@ rendercheck check lesson.mp4 --strict
 
 ```bash
 rendercheck demo                      # generate defects and check them
+rendercheck presets                   # loudness targets, by platform
 rendercheck check lesson.mp4          # one file
 rendercheck check out/                # every media file in a directory
 rendercheck check a.mp4 b.wav c.mp4   # several, checked in parallel
+rendercheck mcp                       # serve the checks over MCP, on stdio
 ```
 
 Directories expand one level, to files with a known media extension. Globs are
@@ -175,14 +244,62 @@ your shell's job. Multiple files are checked on a thread pool — decoding is
 subprocess-bound, and nothing is shared between files.
 
 Inputs: `--script` (narration text, or a path to a `.vtt`/`.srt`/transcript),
-`--presenter` with `--known-names`, `--expect-seconds`, `--rubric` for images.
+`--captions` (found beside the media by default), `--presenter` with
+`--known-names`, `--expect-seconds`, `--expect-width`, `--expect-height`,
+`--expect-fps`, `--rubric` for images.
 
 Thresholds, all matching the Python defaults: `--max-wpm`, `--min-wpm`,
-`--target-lufs`, `--loudness-tol`, `--max-silence`, `--silence-threshold`,
-`--min-tail-drop`, `--max-clipped`, `--max-black`, `--max-freeze`,
-`--duration-tol`, `--min-ratio`.
+`--target-lufs`, `--loudness-tol`, `--max-true-peak`, `--max-silence`,
+`--silence-threshold`, `--min-tail-drop`, `--max-clipped`, `--max-black`,
+`--max-freeze`, `--duration-tol`, `--min-ratio`, `--max-caption-offset`,
+`--max-caption-drift`, `--max-stream-gap`, `--max-start-skew`.
 
-Behaviour: `--strict`, `--json`, `--version`.
+Behaviour: `--preset`, `--strict`, `--json`, `--version`.
+
+## Presets and the config file
+
+`--preset` sets `--target-lufs`, `--loudness-tol` and `--max-true-peak` together
+from a published platform spec, and `rendercheck presets` prints the table with
+its sources. The point is legibility: `--preset ebu` is a decision a reviewer
+can read, where `--target-lufs -23` is a magic number nobody will dare touch.
+
+Project defaults go in `rendercheck.toml`, or `[tool.rendercheck]` in
+`pyproject.toml`. The search walks upward from the working directory, and a
+`pyproject.toml` without a section of ours is skipped rather than treated as an
+empty config.
+
+```toml
+preset = "podcast"
+max_silence = 5.0
+max_caption_offset = 0.5
+```
+
+Keys are the long-flag names with `--` dropped; hyphens and underscores both
+work. **A key that does not exist is reported on stderr, not ignored** — a
+typo'd threshold that silently does nothing is exactly the class of bug this
+library exists to catch.
+
+Precedence, loosest to tightest: built-in defaults, the config file, `--preset`,
+then flags you actually typed. Reading the config needs Python 3.11 (`tomllib`);
+on 3.10 it says so and carries on with flags.
+
+## MCP
+
+`rendercheck mcp` serves the checks to a coding agent over stdio. Written
+against the wire protocol directly, so it adds no dependency.
+
+```bash
+claude mcp add rendercheck -- rendercheck mcp
+```
+
+Two tools. `check_media(path, script?, captions?, expected_seconds?, preset?,
+strict?)` returns the same `status`/`check`/`detail` records as `--json`, plus
+the exit code and a plain-language verdict. `list_checks()` returns every check
+and every preset, so the model can decide which arguments are worth supplying.
+
+A file that *fails its checks* comes back as a normal result with `ok: false` —
+that tool ran perfectly, the answer is just no. `isError` is reserved for a tool
+that could not run at all, such as a path that does not exist.
 
 ## `--json`
 

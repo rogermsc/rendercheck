@@ -6,6 +6,82 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-04
+
+Four checks and three surfaces, all chosen from what people outside this repo
+are asking for rather than from what this pipeline happened to hit.
+
+### Added
+
+- **`assert_captions_aligned`** — do the captions describe the audio they ship
+  next to? The gap here is real: [ffsubsync] and friends *correct* drift, and the
+  online validators lint the `.srt` on its own (overlapping cues, reading speed).
+  Neither asks whether this caption file matches this audio, which is the only
+  question a build needs answered. Both sides become a coarse "is anyone talking
+  now" track — cues on one side, `silencedetect` on the other — and are slid
+  against each other at 100 ms resolution.
+
+  **Offset and drift are separate findings, and drift is reported first.** An
+  offset is one shift from correct; drift means the two were timed against
+  different clocks and no shift fixes it. A drifting file also has an average
+  offset, so testing offset first would report the symptom and bury the cause.
+
+  **It skips when no shift stands out.** Wall-to-wall speech and music beds have
+  no silence structure, so every shift scores identically — and reading a
+  confident zero offset off that flat curve is exactly the failure this library
+  is named after. There is a test for it.
+
+- **`assert_streams_aligned`** — sound and picture must cover the same stretch of
+  time. Catches a mux that ran out of one input (audio ends early) and a
+  concatenation that mistimed its first segment (streams start apart). One
+  `ffprobe` call, no decoding: the cheapest check here. Skips when the container
+  declares no per-stream duration rather than comparing against an invented one.
+
+- **`assert_format`** — resolution and frame rate against what was asked for,
+  checking only what you pass. With `fps` it also catches variable frame rate,
+  a standard cause of audio drifting against picture downstream.
+
+- **`assert_true_peak`** and **platform presets.** `--preset
+  youtube|spotify|tiktok|podcast|apple|web|ebu|atsc|netflix` sets the loudness
+  target, tolerance and true-peak ceiling together from published specs;
+  `rendercheck presets` prints the table with sources. None of the numbers are
+  ours — the contribution is that `--preset ebu` is a decision a reviewer can
+  read where `--target-lufs -23` is a magic number nobody will touch. True peak
+  is what the waveform reaches *between* samples, so it catches the master that
+  measures clean locally and distorts after upload; it comes free from the
+  decode loudness already runs.
+
+- **An MCP server** (`rendercheck mcp`). Coding agents now write render
+  pipelines and run them, and the media that comes back is the one artifact they
+  cannot inspect; the existing media MCP servers cut and transcode, which hands
+  the model *more* media rather than an answer. Written against the wire
+  protocol directly — stdio MCP is newline-delimited JSON-RPC — so it adds **no
+  dependency**. `check_media` returns the same `status`/`check`/`detail` records
+  as `--json`; `list_checks` returns every check and preset.
+
+- **A Docker image**, `ghcr.io/rogermsc/rendercheck`, with ffmpeg already in it.
+  "Install Python, then ffmpeg, then this" is three steps too many for someone
+  whose build is a Node container.
+
+- **A config file** — `rendercheck.toml`, or `[tool.rendercheck]` in
+  `pyproject.toml`. Precedence runs defaults → file → `--preset` → typed flags. A
+  `pyproject.toml` with no section of ours is skipped rather than treated as an
+  empty config, so a package directory inside a repo does not hide the real one.
+  **An unknown key is reported on stderr, not ignored**; needs Python 3.11 for
+  `tomllib`, and says so on 3.10 instead of silently doing nothing.
+
+### Changed
+
+- `rendercheck demo` gained two cases — captions three seconds late against their
+  audio, and a mux whose sound runs out before the picture. Every fixture is
+  built so it demonstrates exactly one defect.
+- The README's *What it does not check* now separates container timing and
+  caption timing from **lip sync**, which still needs a model and is still not
+  here. The new checks do not narrow that disclaimer as much as they might look
+  like they do.
+
+[ffsubsync]: https://github.com/smacke/ffsubsync
+
 ### Fixed
 
 - **npm wrapper 0.2.1 — `npx rendercheck` spawned itself forever.** npx puts its
@@ -114,5 +190,6 @@ reachable only from Python (`--min-wpm`, `--loudness-tol`, `--duration-tol`,
   the file's `(path, mtime, size)` so a re-render is never served a stale
   reading.
 
-[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.0
 [0.2.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.2.0

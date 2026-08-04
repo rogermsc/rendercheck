@@ -14,9 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import _ffmpeg
+from . import captions as _captions
 from ._core import SilentFail, existing, skip, timestamp
 from ._ffmpeg import ToolUnavailable
-from .text import read_script
+from .text import read_cues, read_script
 
 
 def _require_audio(media: str | Path) -> None:
@@ -121,6 +122,41 @@ def assert_loudness(
             f"correctly-levelled audio cut alongside it: {media}"
         )
     return measured
+
+
+def assert_true_peak(media: str | Path, *, max_dbtp: float = -1.0) -> float | None:
+    """Highest true peak, in dBTP.
+
+    Distinct from `assert_no_clipping`, which counts samples already flattened
+    at full scale. True peak is what the waveform reaches *between* samples: a
+    file can measure under 0 dBFS everywhere and still clip once a lossy codec
+    reconstructs it, which is why every platform states a ceiling below zero
+    rather than at it. This is the check that catches a master which sounds fine
+    locally and distorts after upload.
+
+    Read from the same decode as loudness, so it is free once that has run.
+    Returns the measured true peak, or None if it could not be measured.
+    """
+    existing(media)
+    try:
+        _require_audio(media)
+        peak = _ffmpeg.measure(media).true_peak
+    except ToolUnavailable as exc:
+        skip(f"true peak: {exc}")
+        return None
+    if peak == float("-inf"):
+        # Either digital silence or an ffmpeg too old to print input_tp. Both
+        # are "no reading", and neither is evidence the file is within spec.
+        skip(f"true peak: no reading from {media}")
+        return None
+    if peak > max_dbtp:
+        raise SilentFail(
+            f"{media} peaks at {peak:+.1f} dBTP, above the {max_dbtp:+.1f} "
+            f"ceiling -- it measures clean now, but a lossy encode reconstructs "
+            f"the waveform between samples and will clip there. The distortion "
+            f"appears after upload, on the platform's copy, not on yours"
+        )
+    return peak
 
 
 def assert_duration(
@@ -290,6 +326,215 @@ def assert_no_clipping(
             f"lowering the level afterwards"
         )
     return clipped
+
+
+def _one(media: str | Path, kind: str) -> _ffmpeg.Stream | None:
+    """The first stream of `kind`, or None."""
+    return next((s for s in _ffmpeg.streams(media) if s.kind == kind), None)
+
+
+def assert_streams_aligned(
+    media: str | Path, *, max_gap: float = 0.5, max_start_skew: float = 0.25
+) -> float | None:
+    """Whether sound and picture cover the same stretch of time.
+
+    Two defects, one reading. A mux that ran out of one input leaves a file whose
+    audio ends before the picture does -- it plays, it is the right length, and
+    the last stretch is silent. A concatenation that mistimed its first segment
+    leaves the streams starting at different points, which is the whole file
+    running out of sync from the first frame.
+
+    This is a *container* check, not a perceptual one. It reads what the file
+    declares about its own streams and costs no decoding at all. It cannot see
+    lip sync; what it can see is the far more common case where nothing lines up
+    because the timings never did.
+
+    Returns the gap between the two stream endings in seconds, or None if
+    unmeasurable.
+    """
+    existing(media)
+    try:
+        audio, video = _one(media, "audio"), _one(media, "video")
+    except ToolUnavailable as exc:
+        skip(f"stream alignment: {exc}")
+        return None
+    if audio is None or video is None:
+        skip(f"stream alignment: {media} has only one of sound and picture")
+        return None
+    # Matroska and some streamed MP4s carry no per-stream duration. Comparing
+    # against a number we invented would be a confident wrong answer, which is
+    # worse than saying nothing.
+    if audio.length is None or video.length is None:
+        skip(f"stream alignment: {media} declares no per-stream duration")
+        return None
+
+    if audio.start is not None and video.start is not None:
+        skew = audio.start - video.start
+        if abs(skew) > max_start_skew:
+            late = "sound" if skew > 0 else "picture"
+            raise SilentFail(
+                f"{media} starts its two streams {abs(skew):.2f}s apart "
+                f"({late} is late, past the {max_start_skew:g}s limit) -- the "
+                f"file is out of sync from the first frame, and every caption "
+                f"and cue timed against it inherits the same offset"
+            )
+
+    gap = audio.length - video.length
+    if abs(gap) > max_gap:
+        short, length = (
+            ("sound", audio.length) if gap < 0 else ("picture", video.length)
+        )
+        raise SilentFail(
+            f"{media} runs {video.length:.1f}s of picture against "
+            f"{audio.length:.1f}s of sound -- {short} stops {abs(gap):.1f}s "
+            f"early (limit {max_gap:g}s). A mux that ran out of one input "
+            f"produces exactly this: a valid file, correct overall length, and "
+            f"{length:.1f}s in, nothing there"
+        )
+    return gap
+
+
+def assert_format(
+    media: str | Path,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    fps: float | None = None,
+    fps_tol: float = 0.01,
+) -> None:
+    """The picture is the shape and rate you asked the renderer for.
+
+    Checks only what you pass. A generation step that quietly fell back to 720p,
+    or a render that came out at 25 fps for a 30 fps timeline, produces a
+    perfectly valid file that is wrong everywhere it is used downstream.
+
+    Passing `fps` also catches **variable frame rate**: a file whose nominal and
+    average rates disagree plays at a rate that changes as it goes, which is one
+    of the standard reasons audio drifts against picture in an editor.
+    """
+    existing(media)
+    try:
+        video = _one(media, "video")
+    except ToolUnavailable as exc:
+        skip(f"format: {exc}")
+        return
+    if video is None:
+        skip(f"format: {media} has no video stream")
+        return
+
+    if (width or height) and video.width and video.height:
+        want = (width or video.width, height or video.height)
+        if (video.width, video.height) != want:
+            raise SilentFail(
+                f"{media} is {video.width}x{video.height}, not "
+                f"{want[0]}x{want[1]} -- a render that silently fell back to a "
+                f"smaller size is upscaled by everything downstream, and the "
+                f"softness is blamed on the generator rather than on this"
+            )
+
+    if fps is None:
+        return
+    if video.fps is None:
+        skip(f"format: {media} declares no frame rate")
+        return
+    if abs(video.fps - fps) > fps_tol:
+        raise SilentFail(
+            f"{media} runs at {video.fps:.3f} fps, not {fps:g} -- every cue and "
+            f"caption timed in frames lands somewhere else, and the drift grows "
+            f"across the file rather than staying put"
+        )
+    if video.average_fps is not None and abs(video.average_fps - video.fps) > fps_tol:
+        raise SilentFail(
+            f"{media} declares {video.fps:.3f} fps but averages "
+            f"{video.average_fps:.3f} -- the file is variable-rate. Editors and "
+            f"muxes that assume a constant rate will drift the audio against the "
+            f"picture, further the longer the file runs"
+        )
+
+
+# Speech detection wants a different question than dead-air detection does: a
+# lower bar for "quiet" and a much shorter minimum, because the gaps between
+# sentences are the structure being matched against. Dead air asks about holes;
+# this asks about rhythm.
+_SPEECH_THRESHOLD_DB = -40.0
+_SPEECH_GAP = 0.3
+
+
+def assert_captions_aligned(
+    media: str | Path,
+    captions: str | Path,
+    *,
+    max_offset: float = 0.75,
+    max_drift: float = 1.0,
+) -> float | None:
+    """Whether the captions describe the audio they ship next to.
+
+    Captions are generated against one clock and the audio rendered against
+    another -- a concatenation adds a pre-roll, a segment is re-cut, an editor
+    trims a leading breath -- and nothing complains. The file plays, the captions
+    display, and every line arrives at the wrong moment. It is invisible to every
+    other check here, because both files are individually perfect.
+
+    Works by matching the shape of the two: where the cues say someone is
+    talking, against where the audio is not silent. It needs the audio to have
+    some silence structure to match against; wall-to-wall speech or a music bed
+    gives nothing to line up, and this skips rather than guessing.
+
+    Returns the measured offset in seconds (positive means the captions run
+    late), or None if it could not be measured.
+    """
+    existing(media)
+    cues = read_cues(captions)
+    if not cues:
+        skip(f"captions: no cues found in {captions}")
+        return None
+    try:
+        _require_audio(media)
+        length = _ffmpeg.duration(media)
+        silences = _ffmpeg.measure(
+            media, threshold_db=_SPEECH_THRESHOLD_DB, min_seconds=_SPEECH_GAP
+        ).silences
+    except ToolUnavailable as exc:
+        skip(f"captions: {exc}")
+        return None
+
+    fit = _captions.align(cues, silences, length, max_shift=max(5.0, max_offset * 4))
+    if fit is None:
+        skip(f"captions: nothing to align in {media}")
+        return None
+    if not fit.distinct:
+        # No shift beat the others. Either the audio has no silence to match
+        # against, or these captions do not belong to this file at all -- and
+        # this check cannot tell those apart, so it reports neither.
+        skip(
+            f"captions: no alignment stood out for {media} "
+            f"({fit.overlap:.0%} of captioned time lands on speech at best) -- "
+            f"continuous speech and music beds give nothing to match against"
+        )
+        return None
+
+    # Drift is reported ahead of offset because it is the more specific finding
+    # and the more expensive one to act on: a constant offset is one shift away
+    # from correct, while drift means no shift fixes it. A drifting file also
+    # always has *some* average offset, so testing offset first would report the
+    # symptom and bury the cause.
+    if fit.drift is not None and abs(fit.drift) > max_drift:
+        raise SilentFail(
+            f"{captions} drifts {abs(fit.drift):.1f}s against {media} between "
+            f"its start and its end, past the {max_drift:g}s limit -- the two "
+            f"were timed against different clocks, so no single offset "
+            f"correction fixes this. Re-generate the captions from the audio "
+            f"that actually shipped"
+        )
+    if abs(fit.offset) > max_offset:
+        late = "late" if fit.offset > 0 else "early"
+        raise SilentFail(
+            f"{captions} runs {abs(fit.offset):.1f}s {late} against {media}, "
+            f"past the {max_offset:g}s limit -- every line arrives at the wrong "
+            f"moment, and both files are individually valid so nothing else "
+            f"catches it"
+        )
+    return fit.offset
 
 
 def _require_video(media: str | Path, check: str) -> bool:

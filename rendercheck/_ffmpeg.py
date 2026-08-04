@@ -39,6 +39,15 @@ class Measurement(NamedTuple):
     silences: list[tuple[float, float]]
     """`(start, end)` of each silent stretch at or above the requested length."""
 
+    true_peak: float = float("-inf")
+    """Highest true peak in dBTP -- the inter-sample peak, not the sample peak.
+
+    Distinct from `Volume.clipped`, which counts samples already flattened at
+    full scale. True peak is what the waveform reaches *between* samples, so a
+    file can read under 0 dBFS and still clip once a lossy codec reconstructs
+    it. That is the number every platform spec states a ceiling for.
+    """
+
 
 def _run(binary: str, args: list[str]) -> subprocess.CompletedProcess[str]:
     if shutil.which(binary) is None:
@@ -115,6 +124,106 @@ def has_audio(path: str | Path) -> bool:
 def has_video(path: str | Path) -> bool:
     """Whether the file carries at least one video stream."""
     return _has_stream(path, "v")
+
+
+class Stream(NamedTuple):
+    """What the container claims about one stream, before anything is decoded."""
+
+    kind: str
+    """`audio` or `video`."""
+
+    start: float | None
+    """Presentation start, in seconds. None when the container does not say."""
+
+    length: float | None
+    """Stream duration, in seconds. None when the container does not say."""
+
+    width: int | None
+    height: int | None
+    fps: float | None
+    """Nominal frame rate, from `r_frame_rate`."""
+
+    average_fps: float | None
+    """Actual frame rate over the file, from `avg_frame_rate`.
+
+    Diverges from `fps` when the file is variable-rate, which is a common cause
+    of audio drifting against picture in an editor that assumes constant rate.
+    """
+
+
+def _ratio(value: str | None) -> float | None:
+    """ffprobe reports frame rates as `30000/1001`. `0/0` means it has no idea."""
+    if not value or "/" not in value:
+        return None
+    top, _, bottom = value.partition("/")
+    try:
+        return float(top) / float(bottom)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _number(value: object) -> float | None:
+    """A field ffprobe may report as absent, as `N/A`, or as a number.
+
+    Absent is the case that matters: plenty of containers (Matroska especially)
+    carry no per-stream duration at all. Returning None keeps that distinct from
+    a real reading, so callers can skip rather than compare against a zero they
+    invented.
+    """
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+@lru_cache(maxsize=32)
+def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
+    path = fingerprint[0]
+    proc = _run(
+        "ffprobe",
+        [
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,start_time,duration,width,height,"
+            "r_frame_rate,avg_frame_rate",
+            "-of",
+            "json",
+            str(path),
+        ],
+    )
+    if proc.returncode != 0:
+        reported = proc.stderr.strip().splitlines()
+        raise ToolUnavailable(
+            f"ffprobe could not read the streams in {path}: "
+            f"{reported[-1] if reported else 'ffprobe gave no reason'}"
+        )
+    try:
+        found = json.loads(proc.stdout)["streams"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise ToolUnavailable(f"ffprobe listed no streams for {path}") from None
+
+    return tuple(
+        Stream(
+            kind=str(stream.get("codec_type", "")),
+            start=_number(stream.get("start_time")),
+            length=_number(stream.get("duration")),
+            width=int(stream["width"]) if stream.get("width") else None,
+            height=int(stream["height"]) if stream.get("height") else None,
+            fps=_ratio(stream.get("r_frame_rate")),
+            average_fps=_ratio(stream.get("avg_frame_rate")),
+        )
+        for stream in found
+    )
+
+
+def streams(path: str | Path) -> tuple[Stream, ...]:
+    """Every stream the container declares, memoised like `measure`.
+
+    One ffprobe call, no decoding at all -- this is the cheapest thing in the
+    library, and the checks built on it cost roughly nothing to leave switched on.
+    """
+    return _streams(_fingerprint(Path(path)))
 
 
 def tail_level(path: str | Path, seconds: float = 0.25) -> float:
@@ -282,7 +391,12 @@ def _measure(
         raise ToolUnavailable(f"loudnorm measured nothing in {path}")
     try:
         # float() parses loudnorm's "-inf" for silence directly.
-        loudness = float(json.loads(blob.group(0))["input_i"])
+        readings = json.loads(blob.group(0))
+        loudness = float(readings["input_i"])
+        # input_tp comes from the same pass, so it costs nothing. Older ffmpeg
+        # builds print it; treat a missing key as "not measured" rather than as
+        # a peak of zero, which would read as a file clipping at the ceiling.
+        true_peak = float(readings.get("input_tp", "-inf"))
     except (ValueError, KeyError, json.JSONDecodeError):
         raise ToolUnavailable(f"loudnorm output was unreadable for {path}") from None
 
@@ -295,7 +409,9 @@ def _measure(
     # an unexpected start/end imbalance should degrade to fewer reported gaps,
     # not crash a QA run.
     return Measurement(
-        loudness=loudness, silences=list(zip(starts, ends, strict=False))
+        loudness=loudness,
+        silences=list(zip(starts, ends, strict=False)),
+        true_peak=true_peak,
     )
 
 

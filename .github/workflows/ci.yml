@@ -74,6 +74,9 @@ jobs:
           ! rendercheck check noaudio.mp4
           # A path that is not there is a usage error, not a skip.
           rendercheck check definitely-not-here.mp4 || test $? -eq 2
+          # A preset moves the target, so the same clean file now reads quiet.
+          rendercheck check clean.wav --preset netflix && exit 1 || test $? -eq 1
+          rendercheck presets | grep -q "netflix"
 
   integrations:
     # Every surface we tell people to use, exercised once. An integration that
@@ -122,7 +125,9 @@ jobs:
 
           spec = yaml.safe_load(open("action.yml"))
           assert spec["runs"]["using"] == "composite", spec["runs"]
-          assert set(spec["inputs"]) == {"files", "strict", "version", "args"}
+          assert set(spec["inputs"]) == {
+              "files", "strict", "preset", "version", "args",
+          }
           check = spec["runs"]["steps"][-1]
           assert check["name"] == "Check", check
           # Inputs must reach the script through the environment. Interpolating
@@ -162,6 +167,53 @@ jobs:
             && { echo "expected a non-zero exit"; exit 1; } || test $? -eq 2
           env RENDERCHECK_NODE_WRAPPER=1 node npm/bin/rendercheck.js --version 2>&1 \
             | grep -q "resolved to itself"
+
+      # An MCP server that writes one human-readable line to stdout is a broken
+      # server, and nothing about it looks broken until a client disconnects.
+      - name: The MCP server speaks nothing but protocol on stdout
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"check_media","arguments":{"path":"quiet.wav"}}}' \
+            | timeout 120 rendercheck mcp > session.jsonl
+          python - <<'PY'
+          import json
+
+          replies = [json.loads(line) for line in open("session.jsonl") if line.strip()]
+          # Three requests, one notification: the notification must go unanswered.
+          assert len(replies) == 3, replies
+          assert replies[0]["result"]["protocolVersion"] == "2025-06-18", replies[0]
+          body = replies[2]["result"]["structuredContent"]
+          assert body["ok"] is False, body
+          assert any(
+              r["status"] == "FAIL" and r["check"] == "loudness"
+              for r in body["files"][0]["results"]
+          ), body
+          print("mcp session ok")
+          PY
+
+      - name: The Docker image builds and catches a defect
+        run: |
+          docker build -t rendercheck:ci .
+          docker run --rm -v "$PWD:/work" rendercheck:ci check /work/clean.wav
+          docker run --rm -v "$PWD:/work" rendercheck:ci check /work/quiet.wav \
+            && { echo "expected the defect to fail"; exit 1; } || test $? -eq 1
+
+      - name: The config file sets defaults and flags still beat it
+        run: |
+          mkdir -p project && cd project
+          cp ../clean.wav .
+          printf 'preset = "netflix"\n' > rendercheck.toml
+          # The config makes a -16 file read as far too loud for its target...
+          rendercheck check clean.wav && { echo "config was ignored"; exit 1; } \
+            || test $? -eq 1
+          # ...and a flag typed on the command line still overrides it.
+          rendercheck check clean.wav --target-lufs -16 --loudness-tol 2
+          # A key that does not exist is reported, not silently dropped.
+          printf 'max_slience = 9.0\n' > rendercheck.toml
+          rendercheck check clean.wav 2>&1 | grep -q "unknown option 'max_slience'"
 
       - name: The promptfoo assertion grades a real file
         run: |
