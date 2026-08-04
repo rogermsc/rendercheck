@@ -27,11 +27,18 @@ jobs:
           pipx run twine check --strict dist/*
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # The README claims macOS and Windows. Claims get tested here.
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -41,15 +48,91 @@ jobs:
       # binaries, so the suite cannot run without it. This is the one step that
       # does not carry over from a pure-Python project.
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        shell: bash
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1; then
+            echo "already present" && exit 0
+          fi
+          case "${{ runner.os }}" in
+            Linux)   sudo apt-get update && sudo apt-get install -y ffmpeg ;;
+            macOS)   brew install ffmpeg ;;
+            Windows) choco install ffmpeg -y ;;
+          esac
       - run: pip install -e ".[dev,vision]"
       - run: pytest -q --cov --cov-fail-under=80
       - name: Smoke-test the CLI end to end
+        shell: bash
         run: |
+          # Fades out: audio that stops dead at full level is a defect now, and
+          # assert_no_truncation would rightly fail this file without the fade.
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=4" \
-            -af loudnorm=I=-16:TP=-1.5:LRA=11 /tmp/clean.wav
-          rendercheck check /tmp/clean.wav --expect-seconds 4
+            -af "loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st=3.6:d=0.4" clean.wav
+          rendercheck check clean.wav --expect-seconds 4
           # A video with no audio must exit non-zero -- the regression that
           # named this library. `!` so a correct failure passes the step.
-          ffmpeg -loglevel error -f lavfi -i "color=c=blue:s=320x240" -t 3 /tmp/noaudio.mp4
-          ! rendercheck check /tmp/noaudio.mp4
+          ffmpeg -loglevel error -f lavfi -i "color=c=blue:s=320x240" -t 3 noaudio.mp4
+          ! rendercheck check noaudio.mp4
+          # A path that is not there is a usage error, not a skip.
+          rendercheck check definitely-not-here.mp4 || test $? -eq 2
+
+  integrations:
+    # Every surface we tell people to use, exercised once. An integration that
+    # only exists in the README is a claim, not a feature.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Generate a defect to catch
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install -e .
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=6" \
+            -af loudnorm=I=-34:TP=-1.5:LRA=11 quiet.wav
+
+      # The composite action installs from PyPI, so `uses: ./` cannot run here
+      # until the project is published under this name. Until then: prove the
+      # file is valid and that the command its final step runs behaves.
+      - name: The action is well-formed and its command fails on a defect
+        run: |
+          pip install pyyaml
+          python - <<'PY'
+          import yaml
+
+          spec = yaml.safe_load(open("action.yml"))
+          assert spec["runs"]["using"] == "composite", spec["runs"]
+          assert set(spec["inputs"]) == {"files", "strict", "version", "args"}
+          check = spec["runs"]["steps"][-1]
+          assert check["name"] == "Check", check
+          # Inputs must reach the script through the environment. Interpolating
+          # them into the run body would be a script-injection hole.
+          assert "env" in check, check
+          assert "$FILES" in check["run"], check["run"]
+          print("action.yml ok")
+          PY
+          ! rendercheck check quiet.wav
+          ! rendercheck check quiet.wav --strict
+
+      - name: The npx wrapper passes exit codes through
+        run: |
+          node npm/bin/rendercheck.js --version
+          ! node npm/bin/rendercheck.js check quiet.wav
+          node npm/bin/rendercheck.js check /tmp/not-here.wav || test $? -eq 2
+
+      - name: The promptfoo assertion grades a real file
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "examples/promptfoo")
+          from rendercheck_assert import get_assert
+
+          bad = get_assert("quiet.wav")
+          assert bad["pass"] is False, bad
+          assert "LUFS" in bad["reason"], bad
+
+          missing = get_assert("/tmp/not-here.wav")
+          assert missing["pass"] is False, missing
+          print("promptfoo shim ok")
+          PY

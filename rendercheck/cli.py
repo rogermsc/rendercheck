@@ -13,6 +13,7 @@ import os
 import sys
 import warnings
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple
@@ -38,6 +39,8 @@ _IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 # Suffix rather than a probe: deciding what to plan should not cost a subprocess.
 # A video container with no picture still gets planned, and skips honestly.
 _VIDEOS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg"}
+_AUDIO = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
+_MEDIA = _IMAGES | _VIDEOS | _AUDIO
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
@@ -220,8 +223,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "file",
         type=Path,
-        nargs="?",
-        help="the generated media file to check",
+        nargs="*",
+        help="media files to check; a directory checks the media inside it",
     )
     parser.add_argument(
         "--version", action="version", version=f"rendercheck {__version__}"
@@ -355,54 +358,107 @@ def _demo() -> int:
     return EXIT_OK
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if args.command == "demo":
-        return _demo()
-    if args.file is None:
-        print("rendercheck: check needs a file to check", file=sys.stderr)
-        return EXIT_USAGE
-    if not args.file.exists():
-        print(f"rendercheck: no such file: {args.file}", file=sys.stderr)
-        return EXIT_USAGE
-    try:
-        results = [_run(planned) for planned in _plan(args.file, args)]
-    except FileNotFoundError as exc:
-        # A path you typed that isn't there is your bug, not the checker's.
-        print(f"rendercheck: {exc}", file=sys.stderr)
-        return EXIT_USAGE
+def _expand(paths: list[Path]) -> list[Path]:
+    """Directories become the media files inside them, one level down.
 
-    failures = sum(1 for r in results if r.status == FAIL)
-    skips = sum(1 for r in results if r.status == SKIP)
-    passed = len(results) - failures - skips
+    Shells already expand globs; what they do not do is turn `out/` into the
+    twelve renders in it, which is the shape a CI step actually has.
+    """
+    found: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            found.extend(
+                sorted(c for c in path.iterdir() if c.suffix.lower() in _MEDIA)
+            )
+        else:
+            found.append(path)
+    return found
 
+
+def _report(path: Path, results: list[Result], args: argparse.Namespace) -> None:
     if args.json:
         print(
             json.dumps(
                 {
-                    "file": str(args.file),
+                    "file": str(path),
                     # Keys are contract: other pipelines parse this. `check`,
                     # not `name` -- do not "tidy" it into NamedTuple._asdict().
                     "results": [
                         {"status": r.status, "check": r.name, "detail": r.detail}
                         for r in results
                     ],
-                    "failed": failures,
-                    "skipped": skips,
+                    "failed": sum(1 for r in results if r.status == FAIL),
+                    "skipped": sum(1 for r in results if r.status == SKIP),
                 }
             )
         )
     else:
         _print_report(results)
-        print(f"\n{passed} passed, {failures} failed, {skips} skipped")
-        if not passed:
-            print("nothing could be measured -- this is not a clean run")
 
+
+def _verdict(results: list[Result], strict: bool) -> int:
+    failures = sum(1 for r in results if r.status == FAIL)
+    skips = sum(1 for r in results if r.status == SKIP)
+    passed = len(results) - failures - skips
     # An empty run is the failure this library is named after: every check
     # skipped means nothing was looked at, and a green build would be a lie.
     # That holds without --strict; --strict additionally rejects partial runs.
-    if failures or not passed or (args.strict and skips):
+    if failures or not passed or (strict and skips):
         return EXIT_FAILED
+    return EXIT_OK
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "demo":
+        return _demo()
+    if not args.file:
+        print("rendercheck: check needs at least one file", file=sys.stderr)
+        return EXIT_USAGE
+    missing = [p for p in args.file if not p.exists()]
+    if missing:
+        for path in missing:
+            print(f"rendercheck: no such file: {path}", file=sys.stderr)
+        return EXIT_USAGE
+    targets = _expand(args.file)
+    if not targets:
+        print("rendercheck: no media files found to check", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        if len(targets) == 1:
+            batch = [(targets[0], [_run(p) for p in _plan(targets[0], args)])]
+        else:
+            # Decoding is subprocess-bound, so threads are the right tool and
+            # nothing here shares state between files.
+            with ThreadPoolExecutor() as pool:
+                batch = list(
+                    pool.map(lambda t: (t, [_run(p) for p in _plan(t, args)]), targets)
+                )
+    except FileNotFoundError as exc:
+        # A path you typed that isn't there is your bug, not the checker's.
+        print(f"rendercheck: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    worst = EXIT_OK
+    for path, results in batch:
+        if len(batch) > 1 and not args.json:
+            print(f"\n{path}")
+        _report(path, results, args)
+        worst = max(worst, _verdict(results, args.strict))
+
+    if not args.json:
+        every = [r for _, results in batch for r in results]
+        failures = sum(1 for r in every if r.status == FAIL)
+        skips = sum(1 for r in every if r.status == SKIP)
+        passed = len(every) - failures - skips
+        scope = f" across {len(batch)} files" if len(batch) > 1 else ""
+        print(f"\n{passed} passed, {failures} failed, {skips} skipped{scope}")
+        if not passed:
+            print("nothing could be measured -- this is not a clean run")
+
+    if worst:
+        return worst
     return EXIT_OK
 
 

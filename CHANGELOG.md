@@ -36,6 +36,16 @@ name — it is still exactly what the exception means.
   truncates to black or holds a single frame. Both skip rather than pass when
   there is no video stream to analyse.
 - `rendercheck check <file>`, with `--json` for calling from another pipeline.
+  Takes several files, or a directory, and checks them on a thread pool. With
+  more than one file `--json` emits one object per line, so a single-file
+  consumer sees exactly what it saw before.
+- A composite **GitHub Action** (`action.yml`) that installs ffmpeg and fails
+  the build on a defect.
+- An **npx wrapper** (`npm/`) for the Remotion/Node side, which shells to the
+  Python CLI and passes its exit codes through. Not yet published to npm.
+- A **promptfoo custom assertion** (`examples/promptfoo/`). promptfoo's
+  assertions are string-shaped, so an eval can check the narration script and
+  nothing about the audio it produced.
 - `rendercheck demo` — synthesises five defective files with ffmpeg and runs the
   real checks against them. Every check here only fires on *broken* media, so
   trying the library used to require already owning a broken render.

@@ -1,0 +1,32 @@
+# Checking generated speech inside a promptfoo eval.
+#
+# promptfoo's built-in assertions all compare strings, so they can tell you the
+# narration *script* is right and nothing about whether the rendered audio is
+# listenable. This adds that half.
+#
+# Your provider must return a path to the file it rendered.
+
+description: TTS renders that are actually shippable
+
+prompts:
+  - "Narrate this in a warm, unhurried voice: {{script}}"
+
+providers:
+  # Replace with whatever renders your audio and prints the resulting path.
+  - id: exec:./render.sh
+
+tests:
+  - vars:
+      script: >-
+        Welcome back. Today we are looking at how pricing decisions get made,
+        and why the number on the page is usually the last thing anyone argues
+        about.
+    assert:
+      - type: python
+        value: file://rendercheck_assert.py:get_assert
+
+  - vars:
+      script: "Short one. Two sentences only. That is the whole thing."
+    assert:
+      - type: python
+        value: file://rendercheck_assert.py:get_assert

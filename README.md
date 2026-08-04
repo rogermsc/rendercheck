@@ -90,6 +90,35 @@ def test_episode_is_shippable(episode):
     assert_no_dead_air(episode.audio)
 ```
 
+## In your pipeline
+
+**GitHub Actions** — installs ffmpeg and fails the build on a defect:
+
+```yaml
+- uses: rogermsc/rendercheck@v0
+  with:
+    files: out/
+    strict: "true"
+```
+
+**Node, Remotion, anything that renders in a build step:**
+
+```bash
+npx rendercheck check out/
+```
+
+**promptfoo** — its assertions are all string-shaped, so an eval can confirm the
+narration script and tell you nothing about the audio. `examples/promptfoo/`
+closes that half in thirty lines:
+
+```yaml
+assert:
+  - type: python
+    value: file://rendercheck_assert.py:get_assert
+```
+
+**Anything else** — `--json` on stdout, one object per file, plus exit codes.
+
 ---
 
 ## Six checks, six incidents

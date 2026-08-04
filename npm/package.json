@@ -1,0 +1,37 @@
+{
+  "name": "rendercheck",
+  "version": "0.1.0",
+  "description": "Assertions for AI-generated media. The worst bugs in generated video and audio don't throw — pace, loudness, truncation, dead air, black frames. rendercheck makes them throw.",
+  "bin": {
+    "rendercheck": "bin/rendercheck.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "keywords": [
+    "testing",
+    "assertions",
+    "eval",
+    "qa",
+    "ffmpeg",
+    "tts",
+    "text-to-speech",
+    "video",
+    "audio",
+    "remotion",
+    "generative-ai",
+    "ci"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rogermsc/rendercheck.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/rogermsc/rendercheck",
+  "bugs": "https://github.com/rogermsc/rendercheck/issues",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,64 @@
+name: rendercheck
+description: Fail the build when a generated render is silently broken.
+branding:
+  icon: activity
+  color: purple
+
+inputs:
+  files:
+    description: Files or directories to check. A directory checks the media inside it.
+    required: true
+  strict:
+    description: Treat a check that could not run as a failure.
+    required: false
+    default: "false"
+  version:
+    description: Version of rendercheck to install. Defaults to the latest release.
+    required: false
+    default: ""
+  args:
+    description: Extra flags passed through to `rendercheck check`.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install ffmpeg
+      shell: bash
+      run: |
+        if command -v ffmpeg >/dev/null 2>&1; then
+          echo "ffmpeg already present"
+        elif command -v apt-get >/dev/null 2>&1; then
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+        elif command -v brew >/dev/null 2>&1; then
+          brew install ffmpeg
+        elif command -v choco >/dev/null 2>&1; then
+          choco install ffmpeg -y
+        else
+          echo "::error::no way to install ffmpeg on this runner" && exit 1
+        fi
+
+    - name: Install rendercheck
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$VERSION" ]; then
+          python -m pip install --disable-pip-version-check "rendercheck==$VERSION"
+        else
+          python -m pip install --disable-pip-version-check rendercheck
+        fi
+
+    # Inputs go through the environment rather than into the script body:
+    # interpolating ${{ }} straight into a run block is a script-injection hole.
+    - name: Check
+      shell: bash
+      env:
+        FILES: ${{ inputs.files }}
+        STRICT: ${{ inputs.strict }}
+        EXTRA: ${{ inputs.args }}
+      run: |
+        flags=""
+        [ "$STRICT" = "true" ] && flags="--strict"
+        rendercheck check $FILES $flags $EXTRA

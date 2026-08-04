@@ -161,6 +161,52 @@ warnings.simplefilter("error", rendercheck.Skipped)
 rendercheck check lesson.mp4 --strict
 ```
 
+## The command line
+
+```bash
+rendercheck demo                      # generate defects and check them
+rendercheck check lesson.mp4          # one file
+rendercheck check out/                # every media file in a directory
+rendercheck check a.mp4 b.wav c.mp4   # several, checked in parallel
+```
+
+Directories expand one level, to files with a known media extension. Globs are
+your shell's job. Multiple files are checked on a thread pool — decoding is
+subprocess-bound, and nothing is shared between files.
+
+Inputs: `--script` (narration text, or a path to a `.vtt`/`.srt`/transcript),
+`--presenter` with `--known-names`, `--expect-seconds`, `--rubric` for images.
+
+Thresholds, all matching the Python defaults: `--max-wpm`, `--min-wpm`,
+`--target-lufs`, `--loudness-tol`, `--max-silence`, `--silence-threshold`,
+`--min-tail-drop`, `--max-clipped`, `--max-black`, `--max-freeze`,
+`--duration-tol`, `--min-ratio`.
+
+Behaviour: `--strict`, `--json`, `--version`.
+
+## `--json`
+
+One JSON object per file, on stdout. With several files it is one object per
+line (JSONL), so a single-file consumer sees exactly what it always did.
+
+```json
+{
+  "file": "lesson.mp4",
+  "results": [
+    {"status": "FAIL", "check": "loudness", "detail": "-34.0 LUFS is 18.0 dB quieter…"},
+    {"status": "PASS", "check": "dead air", "detail": "0.0 s silence"},
+    {"status": "SKIP", "check": "pace", "detail": "no --script given"}
+  ],
+  "failed": 1,
+  "skipped": 1
+}
+```
+
+`status` is one of `PASS`, `FAIL`, `SKIP`. `check` is the check's name — note
+it is `check`, not `name`, and the key names are a contract other pipelines
+parse. `detail` is the failure message for a `FAIL`, the reason for a `SKIP`,
+and the measurement for a `PASS`.
+
 ## Exit codes
 
 | Code | Meaning |
