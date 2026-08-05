@@ -369,10 +369,24 @@ def _stub_client(findings, stop_reason="end_turn"):
 
 
 def _slide():
-    png = FIXTURES / "slide.png"
+    # Named for its content, not just "slide": a fixture standing in for a
+    # *clean* image has to have something drawn on it, or `assert_not_blank`
+    # correctly fails it. This one used to be solid white, which is precisely
+    # the defect that check exists for. The rename forces a regenerate --
+    # fixtures are cached on `exists()`, so editing the recipe alone would
+    # leave the old blank file in place and the failure standing.
+    png = FIXTURES / "slide-with-content.png"
     if not png.exists():
         _ffmpeg(
-            "-f", "lavfi", "-i", "color=c=white:s=320x180", "-frames:v", "1", str(png)
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=white:s=320x180",
+            "-frames:v",
+            "1",
+            "-vf",
+            "drawbox=x=20:y=40:w=280:h=100:color=black:t=fill",
+            str(png),
         )
     return png
 

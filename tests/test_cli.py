@@ -80,9 +80,36 @@ def test_an_image_without_a_rubric_says_why_it_skipped():
 
     _, out = run(str(_slide()), "--json")
     results = json.loads(out)["results"]
-    assert [r["check"] for r in results] == ["looks ok"]
-    assert results[0]["status"] == "SKIP"
-    assert "no --rubric" in results[0]["detail"]
+    reasons = {r["check"]: r for r in results}
+    assert reasons["looks ok"]["status"] == "SKIP"
+    assert "no --rubric" in reasons["looks ok"]["detail"]
+
+
+def test_a_still_is_measured_without_a_rubric_or_a_key():
+    # The whole point of the blank check: before it, every image needed an API
+    # key and a rubric before this tool would say anything at all about it, so
+    # `rendercheck check slide.png` was one SKIP and a red exit code.
+    from tests.test_checks import _slide
+
+    code, out = run(str(_slide()), "--json")
+    results = json.loads(out)["results"]
+    blank = next(r for r in results if r["check"] == "blank")
+    assert blank["status"] == "PASS", out
+    assert code == 0, out
+
+
+def test_a_blank_still_is_a_defect_not_a_pass(tmp_path):
+    # The failure image generators actually produce: right dimensions, valid
+    # PNG, no error, nothing on it.
+    from tests.test_checks import _ffmpeg
+
+    empty = tmp_path / "empty.png"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
+    )
+    code, out = run(str(empty))
+    assert code == 1, out
+    assert "blank canvas" in out, out
 
 
 # --- the exit-code contract -------------------------------------------------
@@ -97,13 +124,33 @@ def test_a_missing_file_is_a_usage_error_not_a_pass():
 
 
 def test_a_run_that_measured_nothing_is_not_a_pass():
-    from tests.test_checks import _slide
+    # Asserted against `_verdict` directly rather than through a file. This used
+    # to be reachable end to end with an image and no --rubric, but a still now
+    # always has the blank check to run, so no ordinary input reaches it. The
+    # rule it protects is unchanged and is the one the library is named after:
+    # every check skipping means nothing was looked at, and green would be a lie.
+    from rendercheck.cli import EXIT_FAILED, EXIT_OK, Result, _verdict
 
-    # Image, no rubric: the only applicable check cannot run. Zero measurements
-    # must not read as zero problems.
-    code, out = run(str(_slide()))
+    nothing = [Result("SKIP", "loudness", "ffmpeg is not on PATH")]
+    assert _verdict(nothing, strict=False) == EXIT_FAILED
+    assert _verdict([Result("PASS", "loudness", "-16.0 LUFS")], strict=False) == EXIT_OK
+
+
+def test_a_defect_is_never_reported_as_nothing_measured(tmp_path):
+    # A blank still fails its one runnable check and skips the other, so the run
+    # has no passes -- but it was emphatically not unmeasurable. Printing
+    # "nothing could be measured" there contradicts the failure printed directly
+    # above it, which is what happened until the count was split from the reason.
+    from tests.test_checks import _ffmpeg
+
+    empty = tmp_path / "blank.png"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
+    )
+    code, out = run(str(empty))
     assert code == 1, out
-    assert "nothing could be measured" in out, out
+    assert "0 passed, 1 failed" in out, out
+    assert "nothing could be measured" not in out, out
 
 
 def test_strict_rejects_a_partial_run_that_normal_mode_allows():

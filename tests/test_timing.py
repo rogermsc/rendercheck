@@ -8,6 +8,7 @@ with or without pytest:
 """
 
 import hashlib
+import inspect
 import io
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ from rendercheck import (
     Skipped,
     assert_captions_aligned,
     assert_format,
+    assert_not_blank,
     assert_streams_aligned,
     assert_true_peak,
     config,
@@ -614,6 +616,124 @@ def test_python_310_says_it_is_ignoring_the_file_rather_than_doing_it_silently()
 def test_a_missing_config_is_not_an_error():
     # Held outside the version guard: this is the common case on every version.
     assert config.load(start=Path(FIXTURES.anchor), known=set()) == {}
+
+
+# --- blank stills -----------------------------------------------------------
+#
+# The failure image generators actually produce. Every case here is a real file
+# on disk, because the whole claim is about what ffmpeg reads back out of one.
+
+
+def _still(name, *filters):
+    png = FIXTURES / f"{name}.png"
+    if not png.exists():
+        args = ["-f", "lavfi", "-i", "color=c=white:s=320x180", "-frames:v", "1"]
+        if filters:
+            args += ["-vf", ",".join(filters)]
+        _ffmpeg(*args, str(png))
+    return png
+
+
+def _solid(name, colour):
+    png = FIXTURES / f"{name}.png"
+    if not png.exists():
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c={colour}:s=320x180",
+            "-frames:v",
+            "1",
+            str(png),
+        )
+    return png
+
+
+def test_a_solid_canvas_fails_whatever_colour_it_is():
+    # blackdetect sees only the first of these. A generator that returns an
+    # empty white or grey frame is the same defect and just as silent.
+    for colour, word in (("black", "solid black"), ("white", "solid white")):
+        message = raises(assert_not_blank, _solid(f"blank-{colour}", colour))
+        assert word in message, message
+        assert "blank canvas" in message, message
+    grey = raises(assert_not_blank, _solid("blank-grey", "0x808080"))
+    assert "flat tone" in grey, grey
+
+
+def test_one_stray_pixel_does_not_rescue_a_blank_canvas():
+    # THE case the percentile fields exist for. A blank frame carrying a single
+    # 4x4 artifact spans the full 16-235 range on YMIN/YMAX, so a min-to-max
+    # reading calls it full-contrast content. YLOW/YHIGH still report 235-235.
+    stray = _still("blank-stray", "drawbox=x=0:y=0:w=4:h=4:color=black:t=fill")
+    assert "blank canvas" in raises(assert_not_blank, stray)
+
+
+def test_a_still_with_content_passes():
+    drawn = _still("drawn", "drawbox=x=20:y=40:w=280:h=100:color=black:t=fill")
+    spread = assert_not_blank(drawn)
+    assert spread is not None and spread > 200, spread
+
+
+def test_a_frame_rate_is_not_asserted_against_a_still():
+    # ffprobe invents 25 fps for a .png. Comparing against it raises on a number
+    # nobody produced, so this has to skip -- and skip loudly enough to say why.
+    drawn = _still("drawn", "drawbox=x=20:y=40:w=280:h=100:color=black:t=fill")
+    reason = skips(assert_format, drawn, fps=30.0)
+    assert "still" in reason, reason
+
+
+# --- loudness range and audio format ----------------------------------------
+
+
+def test_loudness_range_has_no_floor_because_level_speech_reads_zero():
+    # Consistently-levelled narration measures ~0 LU after gating, and that is
+    # correct rather than a defect. A floor would fail every TTS render there is,
+    # so there is not one -- this asserts the *absence*, which is a design
+    # decision that would otherwise be silently reintroduced.
+    from rendercheck import assert_loudness_range
+
+    assert assert_loudness_range(SPEECH) is not None
+    # No `min_lra` parameter exists to reintroduce one by accident.
+    assert "min_lra" not in inspect.signature(assert_loudness_range).parameters
+
+
+def test_loudness_range_fires_only_past_its_ceiling():
+    from rendercheck import assert_loudness_range
+
+    measured = assert_loudness_range(SPEECH)
+    assert measured is not None
+    # Tightened below whatever this file actually reads, so the fixture cannot
+    # drift out from under the assertion.
+    message = raises(assert_loudness_range, SPEECH, max_lra=max(measured - 0.1, 0.0))
+    assert "swings" in message and "volume setting" in message, message
+
+
+def test_audio_format_reports_the_rate_and_count_it_found():
+    from rendercheck import _ffmpeg as probe
+    from rendercheck import assert_audio_format
+
+    # Read from the fixture rather than hardcoded: what matters is that the
+    # check agrees with the file, not what ffmpeg happened to pick for it.
+    audio = next(s for s in probe.streams(SPEECH) if s.kind == "audio")
+    rate, count = audio.sample_rate, audio.channels
+    assert rate is not None and count is not None, audio
+
+    # Agreeing with the file raises nothing.
+    assert_audio_format(SPEECH, sample_rate=rate, channels=count)
+
+    wrong_rate = raises(assert_audio_format, SPEECH, sample_rate=rate + 100)
+    assert f"sample rate of {rate} Hz" in wrong_rate, wrong_rate
+    assert "resampled downstream" in wrong_rate, wrong_rate
+
+    wrong_count = raises(assert_audio_format, SPEECH, channels=count + 1)
+    assert f"channel count of {count}" in wrong_count, wrong_count
+
+
+def test_audio_format_checks_only_what_it_was_given():
+    from rendercheck import assert_audio_format
+
+    # Neither argument given: nothing to compare, and nothing raised.
+    assert_audio_format(SPEECH)
 
 
 if __name__ == "__main__":

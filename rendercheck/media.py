@@ -36,6 +36,21 @@ def _require_audio(media: str | Path) -> None:
         )
 
 
+def _digital_silence(media: str | Path) -> SilentFail:
+    """The one sentence for an audio stream of nothing but zeroes.
+
+    Two checks reach this condition -- loudness and has-sound, since `-inf` LUFS
+    is the same reading either way -- and they used to describe it in two
+    hand-written sentences that had drifted apart, only one of which said what
+    the listener would experience. One defect gets one description.
+    """
+    return SilentFail(
+        f"{media} carries an audio stream but it is digital silence -- every "
+        f"sample in it is zero, so it will play as nothing at all, which is "
+        f"what a failed synthesis or a muted mix looks like from the outside"
+    )
+
+
 def assert_pace(
     media: str | Path,
     script: str | Path,
@@ -107,11 +122,7 @@ def assert_loudness(
         return None
 
     if measured == float("-inf"):
-        raise SilentFail(
-            f"{media} carries an audio stream but it is digital silence -- "
-            f"every sample is zero, which is what a failed render or a muted "
-            f"mix looks like"
-        )
+        raise _digital_silence(media)
     delta = measured - target_lufs
     if abs(delta) > tol:
         direction = "quieter than" if delta < 0 else "louder than"
@@ -157,6 +168,116 @@ def assert_true_peak(media: str | Path, *, max_dbtp: float = -1.0) -> float | No
             f"appears after upload, on the platform's copy, not on yours"
         )
     return peak
+
+
+def assert_loudness_range(media: str | Path, *, max_lra: float = 15.0) -> float | None:
+    """Loudness range, in LU -- how far the level moves across the programme.
+
+    `assert_loudness` asks where the middle sits. This asks how wide the
+    material swings around it, which is a question the integrated figure cannot
+    answer: a file whose quiet half is 25 LU under its loud half still averages
+    out to a perfectly respectable number.
+
+    **There is deliberately no floor**, and the reason is worth stating because
+    it looks like an omission. Loudness range is gated: EBU R128 discards blocks
+    more than 10 LU below the ungated level before measuring, so the pauses
+    between sentences do not count towards it and only the spread *within
+    speech* does. Consistently-levelled narration therefore reads a legitimate
+    0.0 LU -- measured across every fixture in this library's own demo, the
+    readings are 0.0 to 4.8. A floor would fail almost every TTS render there
+    is, which is precisely the material this library exists for. Over-
+    compression is a real defect; this is not the measurement that finds it.
+
+    The ceiling is the half that holds, and 15 LU is set from measurement rather
+    than from a spec: the widest legitimate reading across this library's demo
+    fixtures is 4.8 LU, while material swung deliberately from near-silence to
+    full scale every thirty seconds reaches 18.1. The default sits between them,
+    close enough to catch a file with no workable volume setting and far enough
+    from real narration not to argue with it.
+
+    Read from the same decode as loudness, so it is free once that has run.
+    Returns the measured range, or None if it could not be measured.
+    """
+    existing(media)
+    try:
+        _require_audio(media)
+        measured = _ffmpeg.measure(media).loudness_range
+    except ToolUnavailable as exc:
+        skip(f"loudness range: {exc}")
+        return None
+    if measured is None:
+        # An ffmpeg too old to print input_lra. Not evidence of anything.
+        skip(f"loudness range: no reading from {media}")
+        return None
+
+    if measured > max_lra:
+        raise SilentFail(
+            f"{media} swings {measured:.1f} LU between its quiet and loud parts, "
+            f"past the {max_lra:g} limit -- there is no single volume setting "
+            f"that works for the whole file. Turned up for the quiet passages, "
+            f"the loud ones startle; set for the loud ones, the quiet ones "
+            f"vanish on a phone speaker or in a car"
+        )
+    return measured
+
+
+def assert_audio_format(
+    media: str | Path,
+    *,
+    sample_rate: int | None = None,
+    channels: int | None = None,
+) -> None:
+    """Sample rate and channel count against what the delivery spec asks for.
+
+    Checks only what you pass, like `assert_format` does for picture. The
+    defects are the quiet kind: a mix bounced to mono when the spec says stereo
+    plays with the music and voice collapsed on top of each other, and a
+    44.1 kHz file delivered where 48 kHz was required gets resampled by whoever
+    receives it, on their terms rather than yours.
+
+    Reads the container only -- no decode -- so it costs nothing to leave on.
+    """
+    existing(media)
+    if sample_rate is None and channels is None:
+        return
+    try:
+        _require_audio(media)
+        audio = _one(media, "audio")
+    except ToolUnavailable as exc:
+        skip(f"audio format: {exc}")
+        return
+    if audio is None:
+        skip(f"audio format: {media} declares no audio stream")
+        return
+
+    for name, want, got, unit in (
+        ("sample rate", sample_rate, audio.sample_rate, " Hz"),
+        ("channel count", channels, audio.channels, ""),
+    ):
+        if want is None:
+            continue
+        if got is None:
+            skip(f"audio format: {media} declares no {name}")
+            continue
+        if got != want:
+            extra = ""
+            if name == "channel count":
+                extra = (
+                    " -- a stereo mix folded to mono loses its separation, and a "
+                    "mono source declared as stereo wastes half the file"
+                    if got < want
+                    else " -- whoever receives it will fold it down on their "
+                    "terms rather than yours"
+                )
+            else:
+                extra = (
+                    " -- it will be resampled downstream, by whichever converter "
+                    "happens to be in the chain"
+                )
+            raise SilentFail(
+                f"{media} has a {name} of {got}{unit}, not the {want}{unit} "
+                f"asked for{extra}"
+            )
 
 
 def assert_duration(
@@ -253,11 +374,7 @@ def assert_has_sound(media: str | Path) -> float | None:
         skip(f"has sound: {exc}")
         return None
     if loudness == float("-inf"):
-        raise SilentFail(
-            f"{media} carries an audio stream but every sample in it is zero -- "
-            f"it will play as silence, which is what a failed synthesis or a "
-            f"muted mix looks like from the outside"
-        )
+        raise _digital_silence(media)
     return loudness
 
 
@@ -331,6 +448,25 @@ def assert_no_clipping(
 def _one(media: str | Path, kind: str) -> _ffmpeg.Stream | None:
     """The first stream of `kind`, or None."""
     return next((s for s in _ffmpeg.streams(media) if s.kind == kind), None)
+
+
+# Codecs that carry a picture rather than a moving image. Deliberately not an
+# extension list: the question is what ffmpeg decoded, not what the file was
+# named. `gif` and `webp` are absent because both can be animated -- for those
+# the frame count settles it.
+_STILL_CODECS = frozenset({"png", "mjpeg", "bmp", "tiff", "ppm", "jpeg2000"})
+
+
+def _is_still(video: _ffmpeg.Stream) -> bool:
+    """Whether this video stream is one frame rather than a sequence.
+
+    Container metadata cannot answer this on its own -- a Matroska of real video
+    declares neither a duration nor a frame count, which is exactly what a .png
+    declares. Only the codec distinguishes them.
+    """
+    if video.codec in _STILL_CODECS:
+        return video.frames is None or video.frames <= 1
+    return False
 
 
 def assert_streams_aligned(
@@ -443,6 +579,14 @@ def assert_format(
             )
 
     if fps is None:
+        return
+    if _is_still(video):
+        # ffprobe describes a still as a video stream and invents a rate for it:
+        # a .png reports 25 fps, a .jpg reports 25 fps and a 0.04s duration. Both
+        # are ffmpeg's defaults for a file that has no rate at all, so comparing
+        # against them raises on a number nobody produced. The CLI never routes a
+        # still here; a library caller can, and did.
+        skip(f"format: {media} is a still, so it has no frame rate to compare")
         return
     if video.fps is None:
         skip(f"format: {media} declares no frame rate")
@@ -595,6 +739,55 @@ def _require_video(media: str | Path, check: str) -> bool:
         skip(f"{check}: {media} has no video stream -- nothing to look at")
         return False
     return True
+
+
+def assert_not_blank(image: str | Path, *, min_spread: float = 16.0) -> float | None:
+    """Whether a still has anything on it.
+
+    Image generators return a blank canvas on failure far more often than they
+    return an error. Solid black is the usual shape of it -- a NaN in the VAE, a
+    sampler misconfigured, half precision on hardware that cannot hold it -- and
+    every report of it says the same thing: no error, no warning, a valid PNG of
+    the right dimensions containing nothing. A slide deck built from those is a
+    deck of blank slides that passes every other check in this library.
+
+    Measured as the spread between the bottom and top of the luma distribution,
+    which is what makes it robust: a blank frame carrying one stray artifact
+    still reads as blank, where a min-to-max reading would call it full-range.
+    It catches any flat canvas, not only a black one -- white, grey and solid
+    colour all read the same, and `blackdetect` sees none of them.
+
+    Returns the measured spread, or None if it could not be measured.
+
+    ponytail: stills only. A *video* that holds one flat frame is already caught
+    by `assert_not_frozen`, whatever colour it is -- a still is the only case
+    with no motion to compare against. Sample across frames here only if some
+    file turns up that neither check sees.
+    """
+    existing(image)
+    try:
+        picture = _ffmpeg.signalstats(image)
+    except ToolUnavailable as exc:
+        skip(f"blank: {exc}")
+        return None
+
+    spread = picture.high - picture.low
+    if spread < min_spread:
+        shade = (
+            "solid black"
+            if picture.high < 32
+            else "solid white"
+            if picture.low > 200
+            else f"one flat tone at luma {picture.low:.0f}"
+        )
+        raise SilentFail(
+            f"{image} is a blank canvas -- its luma spans {spread:.0f} levels "
+            f"(under the {min_spread:g} floor), which is {shade} with nothing "
+            f"drawn on it. A generator that failed and returned an empty frame "
+            f"produces exactly this: correct dimensions, valid file, no error, "
+            f"and nothing on the slide"
+        )
+    return spread
 
 
 def assert_no_black_frames(

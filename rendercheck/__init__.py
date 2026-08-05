@@ -22,15 +22,18 @@ warns and passes rather than blocking your pipeline on its own breakage.
 
 from ._core import SilentFail, Skipped, collect_skips
 from .media import (
+    assert_audio_format,
     assert_captions_aligned,
     assert_duration,
     assert_format,
     assert_has_sound,
     assert_loudness,
+    assert_loudness_range,
     assert_no_black_frames,
     assert_no_clipping,
     assert_no_dead_air,
     assert_no_truncation,
+    assert_not_blank,
     assert_not_frozen,
     assert_pace,
     assert_streams_aligned,
@@ -40,22 +43,25 @@ from .presets import PRESETS, Preset
 from .text import assert_speaker
 from .vision import looks_ok
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 __all__ = [
     "PRESETS",
     "Preset",
     "SilentFail",
     "Skipped",
+    "assert_audio_format",
     "assert_captions_aligned",
     "assert_duration",
     "assert_format",
     "assert_has_sound",
     "assert_loudness",
+    "assert_loudness_range",
     "assert_no_black_frames",
     "assert_no_clipping",
     "assert_no_dead_air",
     "assert_no_truncation",
+    "assert_not_blank",
     "assert_not_frozen",
     "assert_pace",
     "assert_speaker",

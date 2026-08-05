@@ -48,6 +48,18 @@ class Measurement(NamedTuple):
     it. That is the number every platform spec states a ceiling for.
     """
 
+    loudness_range: float | None = None
+    """Loudness range in LU, from loudnorm's `input_lra`.
+
+    The spread between the quiet and loud parts of the programme, which is a
+    different question from `loudness` (where the middle sits). Two files can
+    both measure -16 LUFS while one is flat enough to sound lifeless and the
+    other swings so wide its quiet half vanishes under road noise.
+
+    None when the ffmpeg build did not report it -- never a zero, which would
+    read as a file with no dynamics at all.
+    """
+
 
 def _run(binary: str, args: list[str]) -> subprocess.CompletedProcess[str]:
     if shutil.which(binary) is None:
@@ -150,6 +162,18 @@ class Stream(NamedTuple):
     of audio drifting against picture in an editor that assumes constant rate.
     """
 
+    sample_rate: int | None = None
+    """Audio sample rate in Hz. None when the container does not say."""
+
+    channels: int | None = None
+    """Audio channel count -- 1 for mono, 2 for stereo."""
+
+    codec: str | None = None
+    """Codec name, e.g. `aac`, `pcm_s16le`, `h264`."""
+
+    frames: int | None = None
+    """Frame count, where the container bothers to state one."""
+
 
 def _ratio(value: str | None) -> float | None:
     """ffprobe reports frame rates as `30000/1001`. `0/0` means it has no idea."""
@@ -176,6 +200,15 @@ def _number(value: object) -> float | None:
         return None
 
 
+def _whole(value: object) -> int | None:
+    """Same contract as `_number`, for a field that is a count rather than a
+    measurement. ffprobe reports sample rate as the string `"48000"`."""
+    try:
+        return int(value)  # type: ignore[call-overload,no-any-return]
+    except (TypeError, ValueError):
+        return None
+
+
 @lru_cache(maxsize=32)
 def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
     path = fingerprint[0]
@@ -185,8 +218,8 @@ def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,start_time,duration,width,height,"
-            "r_frame_rate,avg_frame_rate",
+            "stream=codec_type,codec_name,start_time,duration,width,height,"
+            "r_frame_rate,avg_frame_rate,sample_rate,channels,nb_frames",
             "-of",
             "json",
             str(path),
@@ -212,6 +245,10 @@ def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
             height=int(stream["height"]) if stream.get("height") else None,
             fps=_ratio(stream.get("r_frame_rate")),
             average_fps=_ratio(stream.get("avg_frame_rate")),
+            sample_rate=_whole(stream.get("sample_rate")),
+            channels=_whole(stream.get("channels")),
+            codec=str(stream["codec_name"]) if stream.get("codec_name") else None,
+            frames=_whole(stream.get("nb_frames")),
         )
         for stream in found
     )
@@ -350,6 +387,62 @@ def measure_video(
     return _measure_video(_fingerprint(Path(path)), min_black, min_freeze)
 
 
+class Picture(NamedTuple):
+    """How the light in one frame is distributed, from `signalstats`."""
+
+    low: float
+    """Luma at the bottom of the distribution (`YLOW`), on ffmpeg's 0-255 scale."""
+
+    high: float
+    """Luma at the top of the distribution (`YHIGH`)."""
+
+
+@lru_cache(maxsize=32)
+def _signalstats(fingerprint: tuple[str, int, int]) -> Picture:
+    path = fingerprint[0]
+    # -frames:v 1 bounds the work *and* the output. signalstats prints a block
+    # per frame, so without this a ten-minute video would emit a few hundred
+    # thousand lines to be parsed and thrown away.
+    proc = _run(
+        "ffmpeg",
+        [
+            "-nostdin",
+            "-i",
+            path,
+            "-frames:v",
+            "1",
+            "-vf",
+            "signalstats,metadata=print:file=-",
+            "-f",
+            "null",
+            "-",
+        ],
+    )
+    # stdout, not stderr. Every other parser in this module reads stderr because
+    # that is where ffmpeg's filters log; `metadata=print:file=-` is different --
+    # the `-` is a real file argument meaning stdout, and stderr comes back empty.
+    found = {
+        key: float(value)
+        for key, value in re.findall(
+            r"lavfi\.signalstats\.Y(LOW|HIGH)=([\d.]+)", proc.stdout
+        )
+    }
+    if "LOW" not in found or "HIGH" not in found:
+        raise ToolUnavailable(f"signalstats read no luma distribution from {path}")
+    return Picture(low=found["LOW"], high=found["HIGH"])
+
+
+def signalstats(path: str | Path) -> Picture:
+    """Luma distribution of the first frame, memoised like `measure`.
+
+    `YLOW`/`YHIGH` rather than `YMIN`/`YMAX` on purpose: min and max are single
+    pixels, so one stray artifact on an otherwise empty canvas gives a full-range
+    reading. Measured on a blank white frame carrying a single 4x4 black mark:
+    min/max spans 16-235, while low/high correctly reports 235-235.
+    """
+    return _signalstats(_fingerprint(Path(path)))
+
+
 def _fingerprint(path: Path) -> tuple[str, int, int]:
     """Identity of the file *as it is right now*.
 
@@ -417,6 +510,15 @@ def _measure(
     except (TypeError, ValueError):
         true_peak = float("-inf")
 
+    # Same treatment, same reason: loudness range is another optional extra, and
+    # it must come back as None rather than 0.0 when it is absent. A zero here
+    # would read as "no dynamics at all", which is precisely the defect the
+    # check built on this looks for -- an unmeasured file would fail it.
+    try:
+        loudness_range: float | None = float(readings["input_lra"])
+    except (TypeError, ValueError, KeyError):
+        loudness_range = None
+
     starts = [float(v) for v in re.findall(r"silence_start: (-?[\d.]+)", proc.stderr)]
     ends = [float(v) for v in re.findall(r"silence_end: (-?[\d.]+)", proc.stderr)]
     if starts and len(ends) < len(starts):
@@ -429,6 +531,7 @@ def _measure(
         loudness=loudness,
         silences=list(zip(starts, ends, strict=False)),
         true_peak=true_peak,
+        loudness_range=loudness_range,
     )
 
 
