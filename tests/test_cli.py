@@ -4,8 +4,10 @@ Framework-free like the rest: stdout is captured with `redirect_stdout` rather
 than a pytest fixture, so `python tests/test_cli.py` works on its own.
 """
 
+import argparse
 import io
 import json
+import os
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -80,9 +82,36 @@ def test_an_image_without_a_rubric_says_why_it_skipped():
 
     _, out = run(str(_slide()), "--json")
     results = json.loads(out)["results"]
-    assert [r["check"] for r in results] == ["looks ok"]
-    assert results[0]["status"] == "SKIP"
-    assert "no --rubric" in results[0]["detail"]
+    reasons = {r["check"]: r for r in results}
+    assert reasons["looks ok"]["status"] == "SKIP"
+    assert "no --rubric" in reasons["looks ok"]["detail"]
+
+
+def test_a_still_is_measured_without_a_rubric_or_a_key():
+    # The whole point of the blank check: before it, every image needed an API
+    # key and a rubric before this tool would say anything at all about it, so
+    # `rendercheck check slide.png` was one SKIP and a red exit code.
+    from tests.test_checks import _slide
+
+    code, out = run(str(_slide()), "--json")
+    results = json.loads(out)["results"]
+    blank = next(r for r in results if r["check"] == "blank")
+    assert blank["status"] == "PASS", out
+    assert code == 0, out
+
+
+def test_a_blank_still_is_a_defect_not_a_pass(tmp_path):
+    # The failure image generators actually produce: right dimensions, valid
+    # PNG, no error, nothing on it.
+    from tests.test_checks import _ffmpeg
+
+    empty = tmp_path / "empty.png"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
+    )
+    code, out = run(str(empty))
+    assert code == 1, out
+    assert "blank canvas" in out, out
 
 
 # --- the exit-code contract -------------------------------------------------
@@ -97,13 +126,122 @@ def test_a_missing_file_is_a_usage_error_not_a_pass():
 
 
 def test_a_run_that_measured_nothing_is_not_a_pass():
-    from tests.test_checks import _slide
+    # Asserted against `_verdict` directly rather than through a file. This used
+    # to be reachable end to end with an image and no --rubric, but a still now
+    # always has the blank check to run, so no ordinary input reaches it. The
+    # rule it protects is unchanged and is the one the library is named after:
+    # every check skipping means nothing was looked at, and green would be a lie.
+    from rendercheck.cli import EXIT_FAILED, EXIT_OK, Result, _verdict
 
-    # Image, no rubric: the only applicable check cannot run. Zero measurements
-    # must not read as zero problems.
-    code, out = run(str(_slide()))
+    nothing = [Result("SKIP", "loudness", "ffmpeg is not on PATH")]
+    assert _verdict(nothing, strict=False) == EXIT_FAILED
+    assert _verdict([Result("PASS", "loudness", "-16.0 LUFS")], strict=False) == EXIT_OK
+
+
+def test_a_defect_is_never_reported_as_nothing_measured(tmp_path):
+    # A blank still fails its one runnable check and skips the other, so the run
+    # has no passes -- but it was emphatically not unmeasurable. Printing
+    # "nothing could be measured" there contradicts the failure printed directly
+    # above it, which is what happened until the count was split from the reason.
+    from tests.test_checks import _ffmpeg
+
+    empty = tmp_path / "blank.png"
+    _ffmpeg(
+        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
+    )
+    code, out = run(str(empty))
     assert code == 1, out
-    assert "nothing could be measured" in out, out
+    assert "0 passed, 1 failed" in out, out
+    assert "nothing could be measured" not in out, out
+
+
+# --- the config-file type guard ---------------------------------------------
+#
+# `parser.set_defaults()` bypasses `type=`, `choices=` and `nargs=` entirely, so
+# a value arriving from a TOML file gets none of the checking a typed flag gets.
+# This layer puts it back. It is the guard the docs spend a paragraph on and it
+# had no test at all, which is a poor combination for code whose whole job is
+# refusing to let a wrong value through quietly.
+
+
+def _action(flag: str) -> argparse.Action:
+    from rendercheck.cli import _parser
+
+    return next(a for a in _parser()._actions if flag in a.option_strings)
+
+
+def test_a_scalar_where_a_roster_belongs_is_refused():
+    # The damaging one, because a string is still iterable: `known_names =
+    # "Karl"` becomes the roster {k, a, r, l}, which matches nobody, so the
+    # speaker check prints PASS forever rather than refusing to run.
+    from rendercheck.cli import _as_argparse_would
+
+    try:
+        _as_argparse_would(_action("--known-names"), "Karl")
+    except TypeError as exc:
+        assert "expected a list" in str(exc), exc
+    else:
+        raise AssertionError("a bare string was accepted as a roster")
+
+    assert _as_argparse_would(_action("--known-names"), ["Alex", "Jordan"]) == [
+        "Alex",
+        "Jordan",
+    ]
+
+
+def test_a_wrong_typed_threshold_is_refused():
+    from rendercheck.cli import _as_argparse_would
+
+    for flag, value, expected in (
+        ("--max-wpm", "fast", "expected a number"),
+        ("--max-clipped", 1.5, None),  # a float where a count belongs: truncated
+        ("--max-clipped", True, "expected a whole number"),
+        ("--strict", "yes", "expected true or false"),
+        ("--target-lufs", [1, 2], "expected a single value"),
+    ):
+        try:
+            got = _as_argparse_would(_action(flag), value)
+        except (TypeError, ValueError) as exc:
+            assert expected and expected in str(exc), f"{flag}={value!r}: {exc}"
+        else:
+            assert expected is None, f"{flag}={value!r} was accepted as {got!r}"
+
+
+def test_an_invalid_choice_is_refused_with_the_alternatives():
+    from rendercheck.cli import _as_argparse_would
+
+    try:
+        _as_argparse_would(_action("--preset"), "youtub")
+    except ValueError as exc:
+        assert "is not one of" in str(exc) and "youtube" in str(exc), exc
+    else:
+        raise AssertionError("an unknown preset was accepted")
+
+
+def test_a_bad_config_value_is_reported_and_dropped_not_obeyed(tmp_path):
+    # End to end with a real file on disk: the bad key is dropped and named on
+    # stderr, the good one survives, and the run carries on with its default.
+    from rendercheck import config
+    from rendercheck.cli import _from_config, _parser
+
+    if not config.HAVE_TOML:
+        return  # 3.10 has no tomllib; the loader announces that instead
+
+    (tmp_path / "rendercheck.toml").write_text(
+        'known_names = "Karl"\nmax_wpm = 200.0\n'
+    )
+    cwd = os.getcwd()
+    noise = io.StringIO()
+    try:
+        os.chdir(tmp_path)
+        with redirect_stderr(noise):
+            settings = _from_config(_parser())
+    finally:
+        os.chdir(cwd)
+
+    assert "known_names" not in settings, settings
+    assert settings.get("max_wpm") == 200.0, settings
+    assert "ignoring known_names" in noise.getvalue(), noise.getvalue()
 
 
 def test_strict_rejects_a_partial_run_that_normal_mode_allows():

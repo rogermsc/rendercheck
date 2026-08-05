@@ -119,6 +119,53 @@ default on the command line — there is no universal ceiling — and switched o
 it exists to name the built-in defaults, so it has to behave exactly like
 passing no preset at all.
 
+## `assert_loudness_range(media, *, max_lra=15.0)`
+
+Loudness range in LU — how far the level moves across the programme, which the
+integrated figure cannot tell you. A file whose quiet half sits 25 LU under its
+loud half still averages out to a respectable number.
+
+**There is deliberately no floor.** Loudness range is gated: EBU R128 discards
+blocks more than 10 LU below the ungated level before measuring, so the pauses
+between sentences do not count towards it and only the spread *within* speech
+does. Consistently-levelled narration therefore reads a legitimate 0.0 LU —
+across this library's own demo fixtures the readings are 0.0 to 4.8, and six of
+seven would fail a floor of 1.0. That would reject almost every TTS render there
+is. Over-compression is a real defect; this is not the measurement that finds it.
+
+The ceiling is set from measurement rather than from a spec: material swung from
+near-silence to full scale every thirty seconds reaches 18.1 LU, so 15 sits
+between that and anything real. Read from the same decode as loudness.
+
+## `assert_audio_format(media, *, sample_rate=None, channels=None)`
+
+Sample rate and channel count against the delivery spec. Checks only what you
+pass, like `assert_format` does for picture, and skips rather than passes when
+the container declares neither.
+
+Reads the container only — no decoding — so it costs nothing to leave on.
+Presets do **not** set it: a preset governs loudness, and quietly widening an
+existing flag's meaning to also assert 48 kHz would change behaviour for
+everyone already using one.
+
+## `assert_not_blank(image, *, min_spread=16.0)`
+
+Whether a still has anything on it. Image generators return a blank canvas on
+failure far more often than they return an error — the same report against
+DALL·E, Stable Diffusion, Qwen, Gemini and Krita, always with no error, no
+warning, correct dimensions and nothing drawn.
+
+Measured as the spread between the bottom and top of the luma distribution
+(`YLOW` to `YHIGH`), not minimum to maximum. That choice is what makes it hold:
+a blank frame carrying a single stray artifact spans the full 16–235 range on
+min/max, so a naive version calls it full-contrast content, while the percentile
+reading still says 235–235. It catches any flat canvas — white, grey and solid
+colour as well as black, none of which `blackdetect` sees.
+
+**Stills only, deliberately.** A *video* holding one flat frame is already
+caught by `assert_not_frozen`, whatever colour it is; a still is the only case
+with no motion to compare against.
+
 ## `assert_streams_aligned(media, *, max_gap=0.5, max_start_skew=0.25)`
 
 Whether sound and picture cover the same stretch of time. Two defects, one
@@ -335,10 +382,30 @@ against the wire protocol directly, so it adds no dependency.
 claude mcp add rendercheck -- rendercheck mcp
 ```
 
-Two tools. `check_media(path, script?, captions?, expected_seconds?, preset?,
-strict?)` returns the same `status`/`check`/`detail` records as `--json`, plus
-the exit code and a plain-language verdict. `list_checks()` returns every check
-and every preset, so the model can decide which arguments are worth supplying.
+Two tools. `check_media` returns the same `status`/`check`/`detail` records as
+`--json`, plus the exit code and a plain-language verdict. It takes:
+
+| argument | turns on |
+|---|---|
+| `path` (required) | everything applicable to that file; a directory checks what is inside it |
+| `script` | `pace`, and `speaker` alongside `presenter` |
+| `captions` | `captions` — found automatically if a `.vtt`/`.srt` sits beside the media |
+| `expected_seconds` | `duration` |
+| `expect_width`, `expect_height`, `expect_fps` | `format` |
+| `expect_sample_rate`, `expect_channels` | `audio format` |
+| `presenter` + `known_names` | `speaker`. Both, always: a roster holding only the assigned presenter can never report a mismatch |
+| `rubric` | `looks ok`, which needs `ANTHROPIC_API_KEY` |
+| `preset` | the loudness target, and `true peak` where the platform states a ceiling |
+| `strict` | counts a check that could not run as a failure |
+
+`list_checks()` returns every check and every preset, so the model can decide
+which arguments are worth supplying. Every check it names is reachable through
+the arguments above — a check advertised with no way to invoke it is a check the
+model will keep being told about and never manage to run.
+
+The server reads a `rendercheck.toml` above the file being checked, the same way
+the CLI does. It exposes no threshold arguments of its own, so that file is the
+route to project-specific limits.
 
 A file that *fails its checks* comes back as a normal result with `ok: false` —
 that tool ran perfectly, the answer is just no. `isError` is reserved for a tool

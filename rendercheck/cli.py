@@ -21,15 +21,18 @@ from . import __version__, _ffmpeg, config, demo, presets
 from ._core import SilentFail, collect_skips
 from ._ffmpeg import ToolUnavailable
 from .media import (
+    assert_audio_format,
     assert_captions_aligned,
     assert_duration,
     assert_format,
     assert_has_sound,
     assert_loudness,
+    assert_loudness_range,
     assert_no_black_frames,
     assert_no_clipping,
     assert_no_dead_air,
     assert_no_truncation,
+    assert_not_blank,
     assert_not_frozen,
     assert_pace,
     assert_streams_aligned,
@@ -55,7 +58,9 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 _UNITS = {
     "pace": "WPM",
     "loudness": "LUFS",
+    "loudness range": "LU",
     "true peak": "dBTP",
+    "blank": "levels of luma spread",
     "duration": "s",
     "dead air": "s silence",
     "truncation": "dB of fall-off at the end",
@@ -119,6 +124,14 @@ def _run(planned: Planned) -> Result:
 def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
     """Everything applicable to this file, given what the caller supplied."""
     if path.suffix.lower() in _IMAGES:
+        # Unconditional, and the only check here that needs no key and no rubric.
+        # Before it, a still with no --rubric produced a single SKIP and exit 1 --
+        # the tool had nothing to say about the most common way an image
+        # generator fails, which is to return a valid blank canvas.
+        yield Planned(
+            "blank",
+            partial(assert_not_blank, path, min_spread=args.min_image_spread),
+        )
         if args.rubric:
             yield Planned("looks ok", partial(looks_ok, path, args.rubric))
         else:
@@ -207,6 +220,22 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
             yield Planned(
                 "true peak",
                 partial(assert_true_peak, path, max_dbtp=args.max_true_peak),
+            )
+        yield Planned(
+            "loudness range",
+            partial(assert_loudness_range, path, max_lra=args.max_lra),
+        )
+        # Only when asked for, like true peak: there is no universal sample rate
+        # or channel count, only the one your delivery spec states.
+        if args.expect_sample_rate or args.expect_channels:
+            yield Planned(
+                "audio format",
+                partial(
+                    assert_audio_format,
+                    path,
+                    sample_rate=args.expect_sample_rate,
+                    channels=args.expect_channels,
+                ),
             )
         yield Planned(
             "dead air",
@@ -338,6 +367,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expect-height", type=int, help="expected picture height")
     parser.add_argument("--expect-fps", type=float, help="expected frame rate")
     parser.add_argument(
+        "--expect-sample-rate", type=int, help="expected audio sample rate, in Hz"
+    )
+    parser.add_argument(
+        "--expect-channels", type=int, help="expected channel count (1 mono, 2 stereo)"
+    )
+    parser.add_argument(
         "--max-wpm", type=float, default=245.0, help="fastest acceptable narration"
     )
     parser.add_argument(
@@ -353,6 +388,18 @@ def _parser() -> argparse.ArgumentParser:
         "--max-true-peak",
         type=float,
         help="true-peak ceiling in dBTP; off unless given or implied by --preset",
+    )
+    parser.add_argument(
+        "--max-lra",
+        type=float,
+        default=15.0,
+        help="widest acceptable swing between quiet and loud parts, in LU",
+    )
+    parser.add_argument(
+        "--min-image-spread",
+        type=float,
+        default=16.0,
+        help="luma levels a still must span before it counts as not blank",
     )
     parser.add_argument(
         "--max-caption-offset",
@@ -698,7 +745,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         passed = len(every) - failures - skips
         scope = f" across {len(batch)} files" if len(batch) > 1 else ""
         print(f"\n{passed} passed, {failures} failed, {skips} skipped{scope}")
-        if not passed:
+        # Only when nothing ran at all. A run that measured something and found a
+        # defect has 0 passes too, and telling that caller "nothing could be
+        # measured" contradicts the failure printed directly above it.
+        if not passed and not failures:
             print("nothing could be measured -- this is not a clean run")
 
     if worst:

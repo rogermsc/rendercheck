@@ -216,11 +216,77 @@ def test_an_absent_path_argument_does_not_silently_check_the_cwd():
 
 
 def test_the_schema_offers_every_argument_the_checks_can_use():
-    # assert_format shipped with no way to reach it from here, so the check
-    # could never fire over MCP however the model was prompted.
+    # This test's name has always claimed more than its body checked: it named
+    # three keys by hand, so `speaker` and `looks ok` stayed advertised by
+    # list_checks and unreachable through the schema for a whole release. Now
+    # every check the server lists must have some argument that can drive it, or
+    # be one that needs no argument at all.
     schema: Any = TOOLS[0]["inputSchema"]
     offered = set(schema["properties"])
+    listed = {c["check"] for c in call("list_checks")["structuredContent"]["checks"]}
+
+    # check name -> an argument without which it can never fire. Checks absent
+    # from this map run on the file alone.
+    driven_by = {
+        "pace": "script",
+        "speaker": "presenter",
+        "looks ok": "rubric",
+        "captions": "captions",
+        "duration": "expected_seconds",
+        "format": "expect_width",
+        "audio format": "expect_sample_rate",
+    }
+    unreachable = {
+        check: need
+        for check, need in driven_by.items()
+        if check in listed and need not in offered
+    }
+    assert not unreachable, (
+        f"list_checks advertises these but the schema cannot reach them: {unreachable}"
+    )
     assert {"expect_width", "expect_height", "expect_fps"} <= offered, offered
+    assert {"known_names", "rubric", "presenter"} <= offered, offered
+
+
+def test_a_still_is_not_automatically_a_failure():
+    # Every .png returned ok:false with no argument that could change it: the
+    # only check planned for an image was `looks ok`, which needs a rubric the
+    # schema did not offer, so the run had zero passes and _verdict said no.
+    from tests.test_checks import _slide
+
+    result = call("check_media", path=str(_slide()))
+    body = result["structuredContent"]
+    assert body["ok"] is True, body
+    blank = next(r for r in body["files"][0]["results"] if r["check"] == "blank")
+    assert blank["status"] == "PASS", body
+
+
+def test_a_roster_arrives_as_a_list_not_as_its_characters():
+    # `known_names="Alex"` spread into the roster {a,e,l,x} is the config-file
+    # bug of 0.3.0 arriving by another door. A string here is refused outright.
+    result = call(
+        "check_media",
+        path=str(TONE),
+        script="I'm Jordan.",
+        presenter="Alex",
+        known_names="Alex",
+    )
+    assert result["isError"] is True, result
+    assert "list of strings" in result["structuredContent"]["error"], result
+
+    ok = call(
+        "check_media",
+        path=str(TONE),
+        script="Hi, I'm Jordan.",
+        presenter="Alex",
+        known_names=["Alex", "Jordan"],
+    )
+    speaker = next(
+        r
+        for r in ok["structuredContent"]["files"][0]["results"]
+        if r["check"] == "speaker"
+    )
+    assert speaker["status"] == "FAIL", ok
 
 
 def test_list_checks_names_every_check_not_just_the_ones_reporting_a_number():

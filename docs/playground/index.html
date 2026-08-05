@@ -429,22 +429,28 @@
       // The same table as `rendercheck presets`. Kept in sync by hand, which is
       // acceptable only because these are published platform figures rather
       // than anything this project decides.
+      // [target LUFS, tolerance, true-peak ceiling]. The ceiling is the third
+      // entry and null where the platform states none -- it used to be absent
+      // entirely, so picking a preset here quietly did not switch on the
+      // true-peak check that the README promises it does. tests/test_docs.py
+      // now diffs this table against presets.py, so the hand-sync is checked
+      // rather than hoped for.
       const PRESETS = {
-        youtube: [-14, 1, "YouTube normalises playback to -14 LUFS"],
-        spotify: [-14, 1, "Spotify, including podcasts, at -14 LUFS"],
-        tiktok: [-14, 1.5, "TikTok and Instagram, measured rather than published"],
-        podcast: [-16, 1, "AES71 / Apple Podcasts: -16 LUFS stereo"],
-        apple: [-16, 1, "Apple Music Sound Check"],
-        web: [-16, 2, "spoken-word web video -- the default"],
-        ebu: [-23, 1, "EBU R128, European broadcast"],
-        atsc: [-24, 2, "ATSC A/85, North American broadcast"],
-        netflix: [-27, 2, "Netflix delivery, dialog-gated"],
+        youtube: [-14, 1, -1, "YouTube normalises playback to -14 LUFS"],
+        spotify: [-14, 1, -1, "Spotify, including podcasts, at -14 LUFS"],
+        tiktok: [-14, 1.5, -1, "TikTok and Instagram, measured rather than published"],
+        podcast: [-16, 1, -1, "AES71 / Apple Podcasts: -16 LUFS stereo, -19 mono"],
+        apple: [-16, 1, -1, "Apple Music Sound Check, -16 LUFS"],
+        web: [-16, 2, null, "spoken-word web video -- rendercheck's own defaults"],
+        ebu: [-23, 1, -1, "EBU R128, European broadcast"],
+        atsc: [-24, 2, -2, "ATSC A/85, North American broadcast"],
+        netflix: [-27, 2, -2, "Netflix delivery, dialog-gated"],
       };
 
       // Thresholds, kept identical to the Python defaults.
-      const MAX_WPM = 245;
       let TARGET_LUFS = -16;
       let LOUDNESS_TOL = 2;
+      let MAX_TRUE_PEAK = null;
       const MAX_SILENCE = 3;
       const SILENCE_DB = -50;
       const MIN_TAIL_DROP = 6;
@@ -551,6 +557,29 @@
             }
           }
 
+          // Free: input_tp comes out of the loudnorm pass already run above.
+          // Only when the chosen preset states a ceiling, matching the CLI --
+          // there is no universal true-peak limit, it belongs to wherever the
+          // file is going.
+          if (MAX_TRUE_PEAK !== null) {
+            const peak = blob ? parseFloat(JSON.parse(blob[0]).input_tp) : NaN;
+            if (!isFinite(peak)) {
+              results.push(["SKIP", "true peak", `no true-peak reading from ${shown}`]);
+            } else if (peak > MAX_TRUE_PEAK) {
+              results.push([
+                "FAIL", "true peak",
+                `${shown} peaks at ${peak.toFixed(1)} dBTP, above the ${MAX_TRUE_PEAK.toFixed(1)} ceiling -- it measures clean now, but a lossy encode reconstructs the waveform between samples and will clip there. The distortion appears after upload, on the platform's copy, not on yours`,
+              ]);
+            } else {
+              results.push(["PASS", "true peak", `${peak.toFixed(1)} dBTP`]);
+            }
+          } else {
+            results.push([
+              "SKIP", "true peak",
+              "no ceiling for this preset -- pick a platform above, or pass --max-true-peak on the CLI",
+            ]);
+          }
+
           const starts = findAll(audio, /silence_start: (-?[\d.]+)/g);
           const ends = findAll(audio, /silence_end: (-?[\d.]+)/g);
           if (starts.length && ends.length < starts.length && duration) ends.push(duration);
@@ -624,6 +653,15 @@
 
           const fs = findAll(video, /freeze_start: (-?[\d.]+)/g);
           const fd = findAll(video, /freeze_duration: ([\d.]+)/g);
+          // A freeze still running when the file ends has a start and no
+          // duration. Requiring both dropped it, so a video that stopped
+          // producing frames and held the last one to the end reported PASS --
+          // the defect the check exists for, reported as its opposite. Same
+          // shape as the silence terminator above, and the same fix the Python
+          // side carries in _ffmpeg._measure_video.
+          if (fd.length < fs.length && duration) {
+            fd.push(Math.max(duration - fs[fs.length - 1], 0));
+          }
           if (fs.length && fd.length) {
             const i = fd.indexOf(Math.max(...fd));
             results.push([
@@ -635,10 +673,26 @@
           }
         }
 
-        results.push([
-          "SKIP", "pace",
-          "needs the narration script -- run the CLI with --script to time the delivery",
-        ]);
+        // Every check this page cannot run, said out loud. Leaving them off the
+        // table entirely meant a seven-check run looked like a whole one, which
+        // is the exact failure -- "an empty run must never read as a clean one"
+        // -- that the rest of this project is built against. A browser with no
+        // filesystem cannot reach a sidecar caption file or a script, and the
+        // vision check needs an API key that must never come near this page.
+        for (const [check, why] of [
+          ["pace", "needs the narration script -- run the CLI with --script"],
+          ["loudness range", "not implemented here yet; the CLI reports it from this same pass"],
+          ["captions", "needs the .vtt or .srt beside the file, which a browser cannot reach -- run the CLI with --captions"],
+          ["duration", "needs the length this render was supposed to be -- run the CLI with --expect-seconds"],
+          ["format", "needs the size and rate asked for -- run the CLI with --expect-width/--expect-height/--expect-fps"],
+          ["audio format", "needs the rate and channel count asked for -- run the CLI with --expect-sample-rate/--expect-channels"],
+          ["streams", "not implemented here yet; the CLI reads it from the container with no decoding"],
+          ["blank", "stills are not accepted here yet -- run the CLI on a .png to check it"],
+          ["speaker", "needs the script and the assigned presenter -- run the CLI with --script and --presenter"],
+          ["looks ok", "needs an API key, which does not belong in a page that promises to upload nothing"],
+        ]) {
+          results.push(["SKIP", check, why]);
+        }
 
         return results;
       }
@@ -711,9 +765,10 @@
       let lastFile = null;
 
       function applyPreset() {
-        const [target, tol, note] = PRESETS[presetEl.value];
+        const [target, tol, peak, note] = PRESETS[presetEl.value];
         TARGET_LUFS = target;
         LOUDNESS_TOL = tol;
+        MAX_TRUE_PEAK = peak;
         presetNote.textContent = `${note}. On the CLI: --preset ${presetEl.value}`;
       }
       // Re-runs against the file already on screen rather than making the

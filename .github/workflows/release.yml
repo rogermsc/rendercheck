@@ -62,6 +62,38 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
+  # Lists the stdio MCP server in the official registry, which is how an agent
+  # finds it. Ordering is a hard constraint rather than a preference: the
+  # registry verifies ownership by fetching the *live* PyPI package and looking
+  # for the `mcp-name:` marker in its README, so this cannot run until
+  # publish-pypi has finished. Authentication is GitHub OIDC -- no stored
+  # secret, and it works because the namespace is io.github.rogermsc on
+  # rogermsc's own repository.
+  publish-registry:
+    if: ${{ !contains(github.ref_name, 'rc') }}
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: server.json version matches the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(python -c "import json; print(json.load(open('server.json'))['version'])")
+          packaged=$(python -c "import json; print(json.load(open('server.json'))['packages'][0]['version'])")
+          if [ "$tag" != "$declared" ] || [ "$tag" != "$packaged" ]; then
+            echo "tag $tag but server.json says $declared / package $packaged"
+            exit 1
+          fi
+      - name: Publish to the MCP registry
+        run: |
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/').tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
   github-release:
     if: ${{ !contains(github.ref_name, 'rc') }}
     needs: publish-pypi

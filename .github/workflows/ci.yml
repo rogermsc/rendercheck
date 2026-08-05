@@ -26,6 +26,21 @@ jobs:
           pipx run build
           pipx run twine check --strict dist/*
 
+      # The wrapper drifted to 0.2.1 against a Python package on 0.3.1, because
+      # release.yml checks the git tag against __version__ and never looks at
+      # npm at all. `npx rendercheck` and `pip install rendercheck` reporting
+      # different versions of the same tool is a support question nobody should
+      # have to answer.
+      - name: npm wrapper version matches the Python package
+        run: |
+          python_version=$(python -c "import rendercheck; print(rendercheck.__version__)")
+          npm_version=$(python -c "import json; print(json.load(open('npm/package.json'))['version'])")
+          if [ "$python_version" != "$npm_version" ]; then
+            echo "npm/package.json is $npm_version but rendercheck is $python_version"
+            exit 1
+          fi
+          echo "both at $python_version"
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:

@@ -264,6 +264,60 @@ rendercheck check lesson.mp4 --script lesson.vtt \
 people who could actually have been cast, a character in a scenario saying
 *"I'm Rosa, a nurse"* trips the check on every script that tells a story.
 
+## "The image generator returned a completely black image"
+
+Reported against DALL·E, Stable Diffusion, Qwen, Gemini and Krita, always the
+same way: the progress bar completes, the file is a valid PNG of the right
+dimensions, no error is raised anywhere, and there is nothing on it. Half
+precision on hardware that cannot hold it, a NaN through the VAE, a sampler set
+somewhere it should not be.
+
+```bash
+rendercheck check slide-14.png
+```
+
+No flags, no API key. It catches any flat canvas, not just a black one — white,
+grey and solid colour read the same, and `blackdetect` sees none of those. A
+blank frame carrying one stray artifact still reads as blank, because the check
+measures the spread of the luma distribution rather than its extremes.
+
+Point it at a directory to sweep a whole render:
+
+```bash
+rendercheck check out/slides/
+```
+
+---
+
+## "There's no volume setting that works for the whole file"
+
+Turned up so the quiet passages are audible, the loud ones startle. Set for the
+loud ones, half the narration disappears on a phone speaker.
+
+```bash
+rendercheck check lesson-3.mp4
+```
+
+`assert_loudness` asks where the middle sits; this asks how far the file moves
+either side of it, which is a different question and one the integrated figure
+cannot answer. Note there is deliberately **no floor** — consistently-levelled
+narration reads a legitimate 0.0 LU after gating, so a floor would fail almost
+every TTS render. See [the reference](README.md) for why.
+
+---
+
+## "It was delivered in mono" / "the spec says 48 kHz"
+
+```bash
+rendercheck check episode-12.wav --expect-sample-rate 48000 --expect-channels 2
+```
+
+Checks only what you pass. Neither is implied by `--preset`: a preset governs
+loudness, and having it also assert a sample rate would change what that flag
+means for everyone already using one.
+
+---
+
 ## "The slide looks wrong and I can't write a rule for it"
 
 Overflowing titles, colliding logos, figures cropped mid-caption.
