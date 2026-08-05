@@ -1,5 +1,13 @@
 # rendercheck
 
+<!-- mcp-name: io.github.rogermsc/rendercheck -->
+<!--
+  The line above is not decoration. The MCP registry proves who owns a PyPI
+  package by fetching its README and looking for that marker, so it has to ship
+  inside the published long_description. Removing it un-verifies the registry
+  listing on the next release. See server.json.
+-->
+
 [![PyPI](https://img.shields.io/pypi/v/rendercheck)](https://pypi.org/project/rendercheck/)
 [![CI](https://github.com/rogermsc/rendercheck/actions/workflows/ci.yml/badge.svg)](https://github.com/rogermsc/rendercheck/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.14-blue)](https://github.com/rogermsc/rendercheck)
@@ -239,6 +247,11 @@ answer:
 ```bash
 claude mcp add rendercheck -- rendercheck mcp
 ```
+
+It is listed in the [MCP registry](https://registry.modelcontextprotocol.io)
+as `io.github.rogermsc/rendercheck`, so clients that read the registry can
+install it without being told where it lives. No key is needed — every check
+except `looks ok` is deterministic.
 
 `check_media` returns one verdict per check with the measured value, so the
 model can act on "−34 LUFS, 18 dB under target" rather than on a file it cannot

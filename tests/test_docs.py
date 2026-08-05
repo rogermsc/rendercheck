@@ -108,6 +108,46 @@ def test_the_playground_declares_every_check_it_does_not_run():
     )
 
 
+def test_the_registry_manifest_tracks_the_package_version():
+    # server.json states the version twice and both must follow __version__.
+    # release.yml re-checks this against the tag, but failing here means it is
+    # caught on the PR rather than halfway through a release.
+    from rendercheck import __version__
+
+    manifest = json.loads((ROOT / "server.json").read_text())
+    assert manifest["version"] == __version__, manifest["version"]
+    assert manifest["packages"][0]["version"] == __version__, manifest["packages"]
+    assert manifest["packages"][0]["identifier"] == "rendercheck"
+
+    # The registry schema caps `description` at 100 characters and the publish
+    # step is the last thing in a release, so overrunning it fails after the
+    # package is already on PyPI and the tag already pushed. Cheaper here.
+    assert len(manifest["description"]) <= 100, len(manifest["description"])
+
+
+def test_the_readme_carries_the_registry_ownership_marker():
+    # The registry proves PyPI ownership by fetching the published README and
+    # looking for this line. It is easy to lose to a tidy-up, and losing it
+    # un-verifies the listing on the next release with no other symptom.
+    readme = (ROOT / "README.md").read_text()
+    manifest = json.loads((ROOT / "server.json").read_text())
+    assert f"mcp-name: {manifest['name']}" in readme, (
+        "README.md no longer carries the mcp-name marker that the MCP registry "
+        "uses to verify ownership of the PyPI package"
+    )
+
+
+def test_the_npm_wrapper_version_tracks_the_package():
+    from rendercheck import __version__
+
+    wrapper = json.loads((ROOT / "npm" / "package.json").read_text())
+    assert wrapper["version"] == __version__, (
+        f"npm/package.json is {wrapper['version']} but rendercheck is "
+        f"{__version__}; `npx rendercheck` and `pip install rendercheck` would "
+        f"report different versions of the same tool"
+    )
+
+
 if __name__ == "__main__":
     failures = 0
     for name, test in sorted(dict(globals()).items()):
