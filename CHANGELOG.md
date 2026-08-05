@@ -6,6 +6,81 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-05
+
+Three checks whose measurements were already being decoded and thrown away, and
+fixes to three surfaces that were answering the wrong question — including the
+browser playground, which still carried a bug the library fixed in 0.3.1.
+
+### Added
+
+- **`assert_not_blank`** — whether a still has anything on it. Image generators
+  return a blank canvas on failure far more often than they return an error;
+  the same report exists against DALL·E, Stable Diffusion, Qwen, Gemini and
+  Krita, always with no error, correct dimensions and nothing drawn. Catches any
+  flat canvas — white, grey and solid colour as well as black, none of which
+  `blackdetect` sees. Measured as the spread of the luma distribution rather
+  than its extremes, so a blank frame carrying one stray artifact still reads as
+  blank; min-to-max calls that same frame full-contrast content.
+
+  It runs on every still with no flags and no API key. Until now an image needed
+  `[vision]`, a key and a rubric before rendercheck would say anything about it,
+  so `rendercheck check slide.png` measured nothing and exited non-zero.
+- **`assert_loudness_range`** — how far the level moves across the programme,
+  which the integrated figure cannot tell you. Ships with a ceiling and
+  **no floor**, deliberately: loudness range is gated, so consistently-levelled
+  narration reads a legitimate 0.0 LU and a floor would reject almost every TTS
+  render there is. Both bounds set from measurement rather than from a spec.
+- **`assert_audio_format`** — sample rate and channel count against the delivery
+  spec, from a container read with no decoding. Presets stay loudness-only.
+- New flags: `--min-image-spread`, `--max-lra`, `--expect-sample-rate`,
+  `--expect-channels`. All settable from `rendercheck.toml` and all reachable
+  over MCP.
+- **Listed in the official MCP registry** as `io.github.rogermsc/rendercheck`,
+  published from the release workflow over GitHub OIDC.
+
+### Fixed — surfaces that reported the wrong answer
+
+- **The playground passed a video frozen to the end of the file.** `freezedetect`
+  prints `freeze_start` with no `freeze_duration` when the picture is still
+  frozen at EOF; the page required both, so the event was dropped and the defect
+  reported as its opposite. This is the bug the Python side fixed in 0.3.1, left
+  live in the browser — the most public surface this project has.
+- **The playground ran seven of fifteen checks and showed nothing for the rest.**
+  An incomplete run that looks like a whole one is the failure this project is
+  built against. Every check it cannot run now says so, with a reason.
+- **A preset in the playground did not switch on the true-peak check** the README
+  says a preset switches on — its table had no ceiling column at all. Fixed, and
+  now diffed against `presets.py` by a test that fails on a one-digit change.
+- **Two checks were advertised over MCP with no way to reach them.**
+  `list_checks` named `speaker` and `looks ok` while the schema had no
+  `presenter`, `known_names` or `rubric`. Worse for stills: the only check
+  planned for an image needed a rubric that could not be supplied, so **every
+  `.png` came back `ok: false`** with no argument that could change it.
+- **`assert_format` asserted a frame rate against a still.** ffprobe describes a
+  `.png` as a video stream and invents 25 fps for it, so the comparison raised on
+  a number nobody produced. The CLI blocked that path; the library did not.
+- **"nothing could be measured" printed under runs that had measured something**
+  and found a defect, contradicting the failure on the line above it.
+- **The GitHub Action broke on any path containing a space** — `files` was
+  expanded unquoted so several paths could be given at once. One path per line
+  now works; the space-separated form still does.
+- **The npm wrapper had drifted two releases behind** the Python package, with
+  nothing checking it. Both at 0.4.0, and CI now fails if they diverge.
+
+### Changed
+
+- The MCP server reads `rendercheck.toml`. It runs inside the user's project and
+  exposes no threshold arguments of its own, so ignoring that file left an agent
+  no route to project settings at all.
+- Digital silence had two hand-divergent messages for one defect, and only one of
+  them said what a listener would hear. Now one description.
+- `rendercheck demo` gains a blank slide and a wrong-presenter case, so `blank`
+  and `speaker` are no longer invisible to anyone who runs it.
+- The promptfoo assertion checks the picture. Pointed at an `.mp4` it previously
+  graded the audio track alone and returned `pass` having never looked at a
+  frame, so a render that truncated to black or froze went green.
+
 ## [0.3.1] - 2026-08-04
 
 A review of 0.3.0 found fifteen ways it could report success without having
@@ -294,7 +369,8 @@ reachable only from Python (`--min-wpm`, `--loudness-tol`, `--duration-tol`,
   the file's `(path, mtime, size)` so a re-render is never served a stale
   reading.
 
-[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.4.0
 [0.3.1]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.1
 [0.3.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.0
 [0.2.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.2.0

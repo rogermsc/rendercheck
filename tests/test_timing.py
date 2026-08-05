@@ -480,6 +480,51 @@ def test_the_right_size_and_rate_pass():
     assert_format(MATCHED, width=320, height=240, fps=10)
 
 
+def test_a_wrong_frame_rate_is_reported_with_both_numbers():
+    message = raises(assert_format, MATCHED, fps=30.0)
+    assert "10.000 fps, not 30" in message, message
+
+
+def test_a_variable_rate_file_is_caught_by_asking_for_its_nominal_rate():
+    # The VFR branch is a headline feature in the README and had no test. A file
+    # whose nominal and average rates disagree plays at a rate that changes as it
+    # goes, which is a standard cause of audio drifting against picture -- and it
+    # passes a plain rate comparison, because the nominal rate is correct.
+    vfr = FIXTURES / "variable-rate.mp4"
+    if not vfr.exists():
+        # Two segments at different rates joined into one file: the actual cause
+        # in the wild, not a synthetic approximation of it. The container ends up
+        # declaring 30 fps and averaging about 20.
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=30:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=10:duration=2",
+            "-filter_complex",
+            "[0][1]concat=n=2:v=1:a=0",
+            "-fps_mode",
+            "vfr",
+            "-pix_fmt",
+            "yuv420p",
+            str(vfr),
+        )
+
+    from rendercheck import _ffmpeg as probe
+
+    video = next(s for s in probe.streams(vfr) if s.kind == "video")
+    if video.fps is None or video.average_fps is None:
+        return  # this ffmpeg did not record both rates; nothing to compare
+    if abs(video.fps - video.average_fps) <= 0.01:
+        return  # this build re-timed it to constant rate on the way out
+
+    message = raises(assert_format, vfr, fps=video.fps)
+    assert "variable-rate" in message, message
+
+
 def test_format_checks_only_what_it_was_asked_about():
     # Passing nothing must not invent an expectation to fail against.
     assert_format(MATCHED)

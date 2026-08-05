@@ -123,7 +123,7 @@ def build() -> list[Case]:
     dest = directory()
     dest.mkdir(exist_ok=True)
 
-    fast, quiet, dropout, silent, truncated, cutoff, late, short = (
+    fast, quiet, dropout, silent, truncated, cutoff, late, short, blank, misnamed = (
         dest / n
         for n in (
             "machine-gun.wav",
@@ -134,6 +134,8 @@ def build() -> list[Case]:
             "cut-off.wav",
             "late-captions.wav",
             "audio-runs-out.mp4",
+            "empty-slide.png",
+            "wrong-presenter.wav",
         )
     )
     script = dest / "narration.vtt"
@@ -221,6 +223,34 @@ def build() -> list[Case]:
             "aac",
             str(short),
         )
+    if not blank.exists():
+        # A slide-sized canvas with nothing on it. Solid black is what an image
+        # generator returns when its sampler, its VAE or its precision goes
+        # wrong -- valid PNG, correct dimensions, no error anywhere.
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=1280x720",
+            "-frames:v",
+            "1",
+            str(blank),
+        )
+    if not misnamed.exists():
+        # Clean audio. The defect is not in the file at all -- it is in the
+        # script that goes with it, which introduces the wrong person.
+        _sine(12, -16, misnamed)
+    wrong_script = dest / "wrong-presenter.txt"
+    if not wrong_script.exists():
+        # Thirty words against twelve seconds is 150 WPM, comfortably inside the
+        # pace band. Deliberate: every case here must demonstrate exactly one
+        # defect, and an eighteen-word version of this script also failed pace,
+        # which buries the point of the case under an unrelated red line.
+        wrong_script.write_text(
+            "Hello and welcome back to the series. I'm Jordan, and in this "
+            "lesson we are going to look at how all of these separate pieces "
+            "finally fit together in practice.\n"
+        )
 
     return [
         Case(
@@ -278,5 +308,28 @@ def build() -> list[Case]:
             "and the last three seconds have nothing to hear.",
             short,
             [],
+        ),
+        Case(
+            "A slide with nothing on it",
+            "An image generator failed and returned an empty canvas. Correct "
+            "dimensions, valid PNG, no error -- and nothing on the slide.",
+            blank,
+            [],
+        ),
+        Case(
+            "The wrong presenter introduces themselves",
+            "A script said 'I'm Jordan' while Alex was the assigned presenter. "
+            "Every other gate passed: the audio was clean and perfectly in sync.",
+            misnamed,
+            [
+                "--script",
+                wrong_script.name,
+                "--presenter",
+                "Alex",
+                "--known-names",
+                "Alex",
+                "Jordan",
+                "Sam",
+            ],
         ),
     ]

@@ -46,7 +46,7 @@ looks_ok("slide-14.png", ["the title fits on one line"])
 
 Plain assert functions. No framework, no runner, no service. They raise
 `AssertionError`, so they already work in pytest, in CI, or in a five-line
-script. Fourteen of the fifteen checks have **no dependencies and make no
+script. Seventeen of the eighteen checks have **no dependencies and make no
 network calls** — if you have `ffmpeg`, you're ready.
 
 ---
@@ -169,7 +169,7 @@ def test_episode_is_shippable(episode):
 
 ## "Isn't this forty lines of pyloudnorm?"
 
-For one of the eleven checks, roughly yes. None of these measurements are novel,
+For one of the eighteen checks, roughly yes. None of these measurements are novel,
 and it would be dishonest to imply otherwise:
 
 | The measurement | Already available from |
@@ -356,7 +356,7 @@ the top-right corner -- failed rubric item: 'the title fits on one line'
 
 This is the only check that needs a key: `pip install "rendercheck[vision]"`.
 
-## Nine more, for defects other people keep reporting
+## Twelve more, for defects other people keep reporting
 
 The six above came out of one pipeline. These came from reading other people's
 bug reports — the same complaint, filed against every provider in turn:
@@ -372,6 +372,16 @@ bug reports — the same complaint, filed against every provider in turn:
 | `assert_captions_aligned` | Captions written against one clock, audio rendered against another. Every line arrives at the wrong moment, and both files are individually perfect. |
 | `assert_streams_aligned` | Sound and picture that do not cover the same stretch of time — a mux that ran out of one input, or a concatenation that mistimed its first segment. |
 | `assert_format` | A render that quietly fell back to 720p, came out at the wrong frame rate, or is variable-rate where the pipeline downstream assumes constant. |
+| `assert_not_blank` | An image generator that failed and returned an empty canvas — reported against DALL·E, Stable Diffusion, Qwen, Gemini and Krita, always the same way: no error, no warning, correct dimensions, nothing on it. Catches any flat canvas, not only a black one; `blackdetect` sees none of the others. |
+| `assert_loudness_range` | A file with no single workable volume setting: turned up for the quiet passages, the loud ones startle. Different question from `assert_loudness`, which only asks where the middle sits. |
+| `assert_audio_format` | Mono delivered where stereo was specified, or 44.1 kHz where the spec says 48 — resampled downstream by whichever converter happens to be in the chain. |
+
+**The blank check is the one that needs no key.** Until it existed, a still had
+to go through the vision tier before this tool would say anything about it at
+all, so `rendercheck check slide.png` measured nothing and exited non-zero. It
+reads the spread between the bottom and top of the luma distribution rather than
+minimum to maximum, which is what makes it hold up: a blank frame carrying one
+stray artifact spans the full range on min/max and still reads as blank here.
 
 **The caption check is the one with no equivalent anywhere.** [ffsubsync] and
 friends *correct* drift; the online validators lint the `.srt` on its own —

@@ -22,13 +22,14 @@ mypy
 pytest -q --cov --cov-fail-under=80
 ```
 
-Both test files also run as plain scripts (`python tests/test_checks.py`) if you
-would rather not involve pytest.
+Every test file also runs as a plain script (`python tests/test_checks.py`) if
+you would rather not involve pytest.
 
 ## What a good change looks like
 
-**Every check must earn its place with a real defect.** The six that exist are
-each traceable to something that actually shipped. A check that catches a
+**Every check must earn its place with a real defect.** Each of the ones that
+exist is traceable to something that actually shipped, or to a defect other
+people keep filing against every provider in turn. A check that catches a
 hypothetical is a check that mostly produces false positives, and a QA tool
 people learn to ignore is worse than no QA tool.
 

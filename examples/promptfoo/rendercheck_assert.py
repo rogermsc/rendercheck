@@ -26,10 +26,15 @@ from rendercheck import (
     assert_captions_aligned,
     assert_has_sound,
     assert_loudness,
+    assert_loudness_range,
+    assert_no_black_frames,
     assert_no_clipping,
     assert_no_dead_air,
     assert_no_truncation,
+    assert_not_blank,
+    assert_not_frozen,
     assert_pace,
+    assert_streams_aligned,
     assert_true_peak,
     collect_skips,
 )
@@ -40,6 +45,12 @@ from rendercheck.text import find_captions
 # from `rendercheck presets`: youtube, spotify, tiktok, podcast, apple, web, ebu,
 # atsc, netflix. A test can override it per-case with a `preset` var.
 PRESET = "web"
+
+# Which checks apply is decided by what the file is. The CLI does the same thing
+# in `_plan`; this file cannot import that because it is a private planner, so
+# the two lists are kept deliberately short and obvious rather than shared.
+_STILLS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_MOVING = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 
 
 def get_assert(output: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -69,23 +80,42 @@ def get_assert(output: str, context: dict[str, Any] | None = None) -> dict[str, 
         # as a failure with the reason rather than blow up the whole eval run.
         with collect_skips() as skipped:
             target = preset(str(variables.get("preset") or PRESET))
-            checks = [
-                lambda: assert_has_sound(path),
-                lambda: assert_loudness(
-                    path, target_lufs=target.target_lufs, tol=target.tol
-                ),
-                lambda: assert_no_dead_air(path),
-                lambda: assert_no_truncation(path),
-                lambda: assert_no_clipping(path),
-            ]
-            if target.max_true_peak is not None:
-                checks.append(
-                    lambda: assert_true_peak(path, max_dbtp=target.max_true_peak)
-                )
-            if script:
-                checks.append(lambda: assert_pace(path, script))
-            if captions:
-                checks.append(lambda: assert_captions_aligned(path, captions))
+            checks: list[Any] = []
+
+            # A still has no audio to measure and no motion to compare. Grading
+            # it against the audio checks below would be seven skips and a green
+            # result, so it gets the one check that applies to it and stops.
+            if path.suffix.lower() in _STILLS:
+                checks = [lambda: assert_not_blank(path)]
+            else:
+                checks = [
+                    lambda: assert_has_sound(path),
+                    lambda: assert_loudness(
+                        path, target_lufs=target.target_lufs, tol=target.tol
+                    ),
+                    lambda: assert_loudness_range(path),
+                    lambda: assert_no_dead_air(path),
+                    lambda: assert_no_truncation(path),
+                    lambda: assert_no_clipping(path),
+                ]
+                if target.max_true_peak is not None:
+                    checks.append(
+                        lambda: assert_true_peak(path, max_dbtp=target.max_true_peak)
+                    )
+                # The picture. Without these an .mp4 was graded on its audio
+                # track alone and returned pass having never looked at a frame --
+                # so a render that truncated to black, or froze, or lost sync
+                # between its streams, went green.
+                if path.suffix.lower() in _MOVING:
+                    checks += [
+                        lambda: assert_no_black_frames(path),
+                        lambda: assert_not_frozen(path),
+                        lambda: assert_streams_aligned(path),
+                    ]
+                if script:
+                    checks.append(lambda: assert_pace(path, script))
+                if captions:
+                    checks.append(lambda: assert_captions_aligned(path, captions))
             ran = len(checks)
             for check in checks:
                 check()
