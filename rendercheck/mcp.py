@@ -69,6 +69,44 @@ _CHECK_SCHEMA = {
                 "frame rate, a standard cause of audio drifting against picture."
             ),
         },
+        "expect_sample_rate": {
+            "type": "number",
+            "description": "Audio sample rate the delivery spec asks for, in Hz.",
+        },
+        "expect_channels": {
+            "type": "number",
+            "description": (
+                "Channel count the delivery spec asks for: 1 mono, 2 stereo."
+            ),
+        },
+        # These three used to be missing while `list_checks` advertised the
+        # checks they drive, so a model could be told `speaker` and `looks ok`
+        # exist and have no argument with which to reach either.
+        "presenter": {
+            "type": "string",
+            "description": (
+                "Who is supposed to be narrating. Enables the speaker check, "
+                "which needs known_names as well."
+            ),
+        },
+        "known_names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Every presenter who could really have been cast. Required "
+                "alongside presenter: without it a character in a scenario "
+                "saying 'I'm Rosa' trips the check on every script that tells "
+                "a story."
+            ),
+        },
+        "rubric": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Statements a still must satisfy, e.g. 'the title fits on one "
+                "line'. Enables the vision check, which needs an API key."
+            ),
+        },
         "preset": {
             "type": "string",
             "enum": sorted(presets.PRESETS),
@@ -140,6 +178,7 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
         ("--script", "script"),
         ("--captions", "captions"),
         ("--preset", "preset"),
+        ("--presenter", "presenter"),
     ):
         if arguments.get(key):
             # `--flag=value` rather than two words: a value beginning with `-`
@@ -150,19 +189,37 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
         ("--expect-width", "expect_width"),
         ("--expect-height", "expect_height"),
         ("--expect-fps", "expect_fps"),
+        ("--expect-sample-rate", "expect_sample_rate"),
+        ("--expect-channels", "expect_channels"),
     ):
         if arguments.get(key) is not None:
             number = arguments[key]
             if not isinstance(number, int | float) or isinstance(number, bool):
                 raise ValueError(f"{key} must be a number, got {number!r}")
             argv.append(f"{flag}={number}")
+    # The two list-valued arguments. Checked here rather than left to argparse
+    # for the same reason the preset is: a string where a list belongs would be
+    # spread into one roster entry per character, which is how `known_names`
+    # silently became {k,a,r,l} through the config file in 0.3.0.
+    for flag, key in (("--known-names", "known_names"), ("--rubric", "rubric")):
+        given = arguments.get(key)
+        if given is None:
+            continue
+        if isinstance(given, str) or not isinstance(given, list):
+            raise ValueError(f"{key} must be a list of strings, got {given!r}")
+        items = [str(item) for item in given if str(item).strip()]
+        if items:
+            argv.append(flag)
+            argv.extend(items)
     strict = bool(arguments.get("strict"))
     if strict:
         argv.append("--strict")
 
-    # A config file in the server's working directory is not this agent's
-    # intent, and it would change verdicts invisibly across sessions.
-    args = _parse(argv, use_config=False)
+    # Honours a rendercheck.toml above the file being checked. The server runs
+    # inside the user's project, and a project that has written its thresholds
+    # down means them -- ignoring the file left an agent no route to them at
+    # all, since the schema exposes no threshold arguments of its own.
+    args = _parse(argv, use_config=True)
     targets = _expand([path])
     if not targets:
         # A directory holding no media measured nothing. Reporting that as
@@ -217,7 +274,10 @@ def _describe() -> dict[str, Any]:
     checks = {
         "pace": media.assert_pace,
         "loudness": media.assert_loudness,
+        "loudness range": media.assert_loudness_range,
         "true peak": media.assert_true_peak,
+        "blank": media.assert_not_blank,
+        "audio format": media.assert_audio_format,
         "duration": media.assert_duration,
         "dead air": media.assert_no_dead_air,
         "truncation": media.assert_no_truncation,

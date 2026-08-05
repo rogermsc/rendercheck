@@ -67,7 +67,23 @@ runs:
         PRESET: ${{ inputs.preset }}
         EXTRA: ${{ inputs.args }}
       run: |
-        flags=""
-        [ "$STRICT" = "true" ] && flags="--strict"
-        [ -n "$PRESET" ] && flags="$flags --preset $PRESET"
-        rendercheck check $FILES $flags $EXTRA
+        # Arrays rather than one flat string. `files` was expanded unquoted so
+        # that several paths could be given at once, which also meant any path
+        # containing a space was split into two paths that do not exist. One
+        # path per line keeps spaces intact; a single line is still word-split,
+        # so `files: "a.mp4 b.mp4"` keeps working exactly as before.
+        targets=()
+        while IFS= read -r line; do
+          [ -n "$line" ] && targets+=("$line")
+        done <<< "$FILES"
+        if [ "${#targets[@]}" -le 1 ]; then
+          read -ra targets <<< "$FILES"
+        fi
+
+        flags=()
+        if [ "$STRICT" = "true" ]; then flags+=(--strict); fi
+        if [ -n "$PRESET" ]; then flags+=(--preset "$PRESET"); fi
+        extra=()
+        if [ -n "$EXTRA" ]; then read -ra extra <<< "$EXTRA"; fi
+
+        rendercheck check "${targets[@]}" "${flags[@]}" "${extra[@]}"
