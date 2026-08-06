@@ -43,7 +43,7 @@ from .presets import PRESETS, Preset
 from .text import assert_speaker
 from .vision import looks_ok
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 __all__ = [
     "PRESETS",

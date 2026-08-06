@@ -792,3 +792,129 @@ if __name__ == "__main__":
                 print(f"FAIL {name}: {exc}")
     print("all timing checks passed" if not failures else f"{failures} failed")
     sys.exit(1 if failures else 0)
+
+
+# --- what the 0.4.0 review found -------------------------------------------
+#
+# Every one of these passed its own tests in 0.4.0 and was wrong anyway. They
+# are here because a test that only covers the case you thought of is how the
+# original defects survived review in the first place.
+
+
+def _clip(name, *args):
+    """A moving picture, cached like the rest of the fixtures."""
+    path = FIXTURES / name
+    if not path.exists():
+        _ffmpeg(*args, str(path))
+    return path
+
+
+def test_an_animated_gif_is_not_judged_on_its_first_frame():
+    # A clip opening on a dark leader is not a blank canvas. The CLI routes every
+    # image extension into the blank check, so this reported an empty render.
+    fade = _clip(
+        "dark-leader.gif",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=160x120:d=1",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=s=160x120:d=2",
+        "-filter_complex",
+        "[0][1]concat=n=2:v=1:a=0",
+    )
+    reason = skips(assert_not_blank, fade)
+    assert "moving picture" in reason, reason
+
+
+def test_a_single_frame_gif_is_still_treated_as_a_still():
+    # The other half of the same question: gif carries either, and the frame
+    # count is what settles it. Skipping every gif would lose a real check.
+    one = _clip(
+        "one-frame.gif",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=160x120",
+        "-frames:v",
+        "1",
+    )
+    assert "blank canvas" in raises(assert_not_blank, one)
+
+
+def test_real_mjpeg_video_keeps_its_frame_rate_check():
+    # `.jpg` and a Matroska of motion JPEG both report codec `mjpeg`, and neither
+    # declares a frame count -- so a codec test called this a still and silently
+    # switched off the rate and variable-rate checks for the whole family.
+    mj = _clip(
+        "motion-jpeg.mkv",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=s=160x120:rate=10:d=2",
+        "-c:v",
+        "mjpeg",
+    )
+    assert "10.000 fps, not 999" in raises(assert_format, mj, fps=999.0)
+
+
+def test_the_blank_reading_comes_from_the_first_frame():
+    # `-frames:v 1` bounds the output, not the filter graph: it emits two
+    # metadata blocks, and keeping the last made the verdict depend on how far
+    # ahead ffmpeg ran. Frame 0 here is black, frame 1 onwards is not.
+    from rendercheck import _ffmpeg as probe
+
+    fade = _clip(
+        "dark-leader.gif",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=160x120:d=1",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=s=160x120:d=2",
+        "-filter_complex",
+        "[0][1]concat=n=2:v=1:a=0",
+    )
+    picture = probe.signalstats(fade)
+    assert picture.high - picture.low == 0.0, picture
+
+
+def test_luma_is_reported_on_the_same_scale_whatever_the_bit_depth():
+    # signalstats reports in the source's own depth: a 10-bit black frame reads
+    # 64, not 16, so every threshold here was four times less sensitive on it.
+    from rendercheck import _ffmpeg as probe
+
+    ten = _clip(
+        "black-10bit.mp4",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=160x120",
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        "yuv420p10le",
+        "-c:v",
+        "libx264",
+    )
+    picture = probe.signalstats(ten)
+    assert picture.low < 16.0, picture
+    assert picture.high - picture.low == 0.0, picture
+
+
+def test_audio_format_does_not_report_a_passing_check_as_skipped():
+    # One unreadable field used to make the whole check SKIP, so a channel count
+    # that was compared and matched read as unmeasured -- and under --strict that
+    # turns a correct file into a failure.
+    from rendercheck import _ffmpeg as probe
+    from rendercheck import assert_audio_format
+
+    audio = next(s for s in probe.streams(SPEECH) if s.kind == "audio")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", Skipped)
+        assert_audio_format(SPEECH, channels=audio.channels)
+    assert not [w for w in caught if issubclass(w.category, Skipped)], caught

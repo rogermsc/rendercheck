@@ -46,11 +46,17 @@ from rendercheck.text import find_captions
 # atsc, netflix. A test can override it per-case with a `preset` var.
 PRESET = "web"
 
-# Which checks apply is decided by what the file is. The CLI does the same thing
-# in `_plan`; this file cannot import that because it is a private planner, so
-# the two lists are kept deliberately short and obvious rather than shared.
-_STILLS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-_MOVING = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+# Which checks apply is decided by what the file is. Taken from the CLI rather
+# than retyped: a hand-copied list drifted immediately -- it was missing .m4v,
+# .mpg and .mpeg, so those took the audio branch and were graded `pass` having
+# never had a frame looked at. The fallback keeps this example runnable against
+# an older rendercheck that does not export them.
+try:
+    from rendercheck.cli import _IMAGES as _STILLS
+    from rendercheck.cli import _VIDEOS as _MOVING
+except ImportError:  # pragma: no cover
+    _STILLS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    _MOVING = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg"}
 
 
 def get_assert(output: str, context: dict[str, Any] | None = None) -> dict[str, Any]:

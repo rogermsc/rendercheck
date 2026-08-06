@@ -7,8 +7,8 @@ than a pytest fixture, so `python tests/test_cli.py` works on its own.
 import argparse
 import io
 import json
-import os
 import sys
+import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -100,16 +100,17 @@ def test_a_still_is_measured_without_a_rubric_or_a_key():
     assert code == 0, out
 
 
-def test_a_blank_still_is_a_defect_not_a_pass(tmp_path):
+def test_a_blank_still_is_a_defect_not_a_pass():
     # The failure image generators actually produce: right dimensions, valid
     # PNG, no error, nothing on it.
     from tests.test_checks import _ffmpeg
 
-    empty = tmp_path / "empty.png"
-    _ffmpeg(
-        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
-    )
-    code, out = run(str(empty))
+    with tempfile.TemporaryDirectory() as scratch:
+        empty = Path(scratch) / "empty.png"
+        _ffmpeg(
+            "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
+        )
+        code, out = run(str(empty))
     assert code == 1, out
     assert "blank canvas" in out, out
 
@@ -138,18 +139,19 @@ def test_a_run_that_measured_nothing_is_not_a_pass():
     assert _verdict([Result("PASS", "loudness", "-16.0 LUFS")], strict=False) == EXIT_OK
 
 
-def test_a_defect_is_never_reported_as_nothing_measured(tmp_path):
+def test_a_defect_is_never_reported_as_nothing_measured():
     # A blank still fails its one runnable check and skips the other, so the run
     # has no passes -- but it was emphatically not unmeasurable. Printing
     # "nothing could be measured" there contradicts the failure printed directly
     # above it, which is what happened until the count was split from the reason.
     from tests.test_checks import _ffmpeg
 
-    empty = tmp_path / "blank.png"
-    _ffmpeg(
-        "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
-    )
-    code, out = run(str(empty))
+    with tempfile.TemporaryDirectory() as scratch:
+        empty = Path(scratch) / "blank.png"
+        _ffmpeg(
+            "-f", "lavfi", "-i", "color=c=black:s=320x180", "-frames:v", "1", str(empty)
+        )
+        code, out = run(str(empty))
     assert code == 1, out
     assert "0 passed, 1 failed" in out, out
     assert "nothing could be measured" not in out, out
@@ -218,7 +220,7 @@ def test_an_invalid_choice_is_refused_with_the_alternatives():
         raise AssertionError("an unknown preset was accepted")
 
 
-def test_a_bad_config_value_is_reported_and_dropped_not_obeyed(tmp_path):
+def test_a_bad_config_value_is_reported_and_dropped_not_obeyed():
     # End to end with a real file on disk: the bad key is dropped and named on
     # stderr, the good one survives, and the run carries on with its default.
     from rendercheck import config
@@ -227,17 +229,17 @@ def test_a_bad_config_value_is_reported_and_dropped_not_obeyed(tmp_path):
     if not config.HAVE_TOML:
         return  # 3.10 has no tomllib; the loader announces that instead
 
-    (tmp_path / "rendercheck.toml").write_text(
-        'known_names = "Karl"\nmax_wpm = 200.0\n'
-    )
-    cwd = os.getcwd()
     noise = io.StringIO()
-    try:
-        os.chdir(tmp_path)
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        (root / "rendercheck.toml").write_text(
+            'known_names = "Karl"\nmax_wpm = 200.0\n'
+        )
+        # `start=` rather than chdir: the loader takes one, and a test that
+        # changes the process's working directory races every other test in the
+        # file the moment anything runs in parallel.
         with redirect_stderr(noise):
-            settings = _from_config(_parser())
-    finally:
-        os.chdir(cwd)
+            settings = _from_config(_parser(), start=root)
 
     assert "known_names" not in settings, settings
     assert settings.get("max_wpm") == 200.0, settings

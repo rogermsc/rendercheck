@@ -3,7 +3,7 @@
   "name": "io.github.rogermsc/rendercheck",
   "title": "rendercheck",
   "description": "Check generated audio, video and stills for defects. Returns a verdict, not more media.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "repository": {
     "url": "https://github.com/rogermsc/rendercheck",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "rendercheck",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

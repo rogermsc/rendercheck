@@ -197,11 +197,12 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(number, int | float) or isinstance(number, bool):
                 raise ValueError(f"{key} must be a number, got {number!r}")
             argv.append(f"{flag}={number}")
-    # The two list-valued arguments. Checked here rather than left to argparse
+    # The two list-valued arguments. Validated here rather than left to argparse
     # for the same reason the preset is: a string where a list belongs would be
     # spread into one roster entry per character, which is how `known_names`
     # silently became {k,a,r,l} through the config file in 0.3.0.
-    for flag, key in (("--known-names", "known_names"), ("--rubric", "rubric")):
+    lists: dict[str, list[str]] = {}
+    for key in ("known_names", "rubric"):
         given = arguments.get(key)
         if given is None:
             continue
@@ -209,17 +210,32 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} must be a list of strings, got {given!r}")
         items = [str(item) for item in given if str(item).strip()]
         if items:
-            argv.append(flag)
-            argv.extend(items)
-    strict = bool(arguments.get("strict"))
-    if strict:
+            lists[key] = items
+    if arguments.get("strict"):
         argv.append("--strict")
 
-    # Honours a rendercheck.toml above the file being checked. The server runs
-    # inside the user's project, and a project that has written its thresholds
-    # down means them -- ignoring the file left an agent no route to them at
-    # all, since the schema exposes no threshold arguments of its own.
-    args = _parse(argv, use_config=True)
+    # Resolved from the directory holding the media, not from the server's own
+    # working directory. A long-lived server is started wherever the client
+    # happened to launch it, so searching upward from `cwd` reads a config with
+    # no relation to the file being checked -- measured: a clean -16 LUFS file
+    # failed against a stray `target_lufs = -40` in the launch directory.
+    # `.parent` of a directory is the directory *above* it, which would skip a
+    # config sitting in the very folder being checked. Resolved, so a relative
+    # path from the client does not make the upward walk start somewhere else.
+    here = path.resolve()
+    args = _parse(
+        argv, use_config=True, config_from=here if here.is_dir() else here.parent
+    )
+    # Set on the namespace rather than passed through argv. A rubric line is
+    # prose a model wrote, and prose beginning with a dash ("- the title fits")
+    # is read by argparse as an option and exits the process. There is no argv
+    # spelling that avoids it for a `nargs="+"` option -- a `--` separator is
+    # swallowed as the end-of-options marker and leaves the flag with no values.
+    # These are already validated as lists of strings, so nothing is skipped by
+    # going around the parser; and an argument the caller typed should win over
+    # the config file regardless, which assigning last also gives.
+    for key, items in lists.items():
+        setattr(args, key, items)
     targets = _expand([path])
     if not targets:
         # A directory holding no media measured nothing. Reporting that as
@@ -235,7 +251,11 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
     worst = EXIT_OK
     for target in targets:
         results = [_run(planned) for planned in _plan(target, args)]
-        worst = max(worst, _verdict(results, strict))
+        # args.strict, not the raw tool argument: the config file can set it
+        # too, and reading only the tool call meant a project that had written
+        # `strict = true` down got a lenient verdict here and a strict one from
+        # the CLI on the very same file.
+        worst = max(worst, _verdict(results, args.strict))
         files.append(
             {
                 "file": str(target),

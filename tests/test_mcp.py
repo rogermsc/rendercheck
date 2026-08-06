@@ -334,3 +334,56 @@ if __name__ == "__main__":
                 print(f"FAIL {name}: {exc}")
     print("mcp ok" if not failures else f"{failures} failed")
     sys.exit(1 if failures else 0)
+
+
+def test_the_config_comes_from_beside_the_media_not_the_servers_cwd():
+    # A long-lived server is started wherever the client launched it, so
+    # searching upward from cwd reads a config with no relation to the file.
+    # Measured before the fix: a clean -16 LUFS file failed against a stray
+    # `target_lufs = -40` sitting in the launch directory.
+    import os
+    import shutil
+    import tempfile
+
+    from rendercheck import config
+
+    if not config.HAVE_TOML:
+        return
+
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        (root / "launched-here").mkdir()
+        (root / "beside-the-media").mkdir()
+        (root / "launched-here" / "rendercheck.toml").write_text(
+            "target_lufs = -40.0\n"
+        )
+        media = root / "beside-the-media" / "tone.wav"
+        shutil.copy(TONE, media)
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(root / "launched-here")
+            body = call("check_media", path=str(media))["structuredContent"]
+        finally:
+            os.chdir(cwd)
+
+    loudness = next(r for r in body["files"][0]["results"] if r["check"] == "loudness")
+    assert loudness["status"] == "PASS", body
+
+
+def test_a_rubric_line_starting_with_a_dash_does_not_kill_the_call():
+    # Prose written by a model starts with a dash often enough, and argparse
+    # reads it as an option and exits. There is no argv spelling that avoids it
+    # for a multi-value option, so these bypass the parser entirely.
+    from tests.test_checks import _slide
+
+    result = call("check_media", path=str(_slide()), rubric=["- the title fits"])
+    assert result["isError"] is False, result
+    looks = next(
+        r
+        for r in result["structuredContent"]["files"][0]["results"]
+        if r["check"] == "looks ok"
+    )
+    # Reached the check: the reason is about the vision extra or the key, never
+    # about a missing rubric.
+    assert "no --rubric" not in looks["detail"], looks

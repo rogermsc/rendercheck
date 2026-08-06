@@ -209,8 +209,22 @@ def _whole(value: object) -> int | None:
         return None
 
 
+class Probe(NamedTuple):
+    """One ffprobe call: what the container is, and what is inside it."""
+
+    container: str
+    """`format_name`, e.g. `png_pipe`, `image2`, `matroska,webm`.
+
+    The only thing that reliably separates a still from a moving picture. The
+    codec cannot: a `.jpg` and a Matroska full of motion JPEG both report
+    `mjpeg`, and neither declares a frame count. The container knows.
+    """
+
+    streams: tuple[Stream, ...]
+
+
 @lru_cache(maxsize=32)
-def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
+def _probe(fingerprint: tuple[str, int, int]) -> Probe:
     path = fingerprint[0]
     proc = _run(
         "ffprobe",
@@ -218,6 +232,7 @@ def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
             "-v",
             "error",
             "-show_entries",
+            "format=format_name:"
             "stream=codec_type,codec_name,start_time,duration,width,height,"
             "r_frame_rate,avg_frame_rate,sample_rate,channels,nb_frames",
             "-of",
@@ -232,25 +247,30 @@ def _streams(fingerprint: tuple[str, int, int]) -> tuple[Stream, ...]:
             f"{reported[-1] if reported else 'ffprobe gave no reason'}"
         )
     try:
-        found = json.loads(proc.stdout)["streams"]
+        payload = json.loads(proc.stdout)
+        found = payload["streams"]
     except (json.JSONDecodeError, KeyError, TypeError):
         raise ToolUnavailable(f"ffprobe listed no streams for {path}") from None
+    container = str(payload.get("format", {}).get("format_name", ""))
 
-    return tuple(
-        Stream(
-            kind=str(stream.get("codec_type", "")),
-            start=_number(stream.get("start_time")),
-            length=_number(stream.get("duration")),
-            width=int(stream["width"]) if stream.get("width") else None,
-            height=int(stream["height"]) if stream.get("height") else None,
-            fps=_ratio(stream.get("r_frame_rate")),
-            average_fps=_ratio(stream.get("avg_frame_rate")),
-            sample_rate=_whole(stream.get("sample_rate")),
-            channels=_whole(stream.get("channels")),
-            codec=str(stream["codec_name"]) if stream.get("codec_name") else None,
-            frames=_whole(stream.get("nb_frames")),
-        )
-        for stream in found
+    return Probe(
+        container=container,
+        streams=tuple(
+            Stream(
+                kind=str(stream.get("codec_type", "")),
+                start=_number(stream.get("start_time")),
+                length=_number(stream.get("duration")),
+                width=int(stream["width"]) if stream.get("width") else None,
+                height=int(stream["height"]) if stream.get("height") else None,
+                fps=_ratio(stream.get("r_frame_rate")),
+                average_fps=_ratio(stream.get("avg_frame_rate")),
+                sample_rate=_whole(stream.get("sample_rate")),
+                channels=_whole(stream.get("channels")),
+                codec=str(stream["codec_name"]) if stream.get("codec_name") else None,
+                frames=_whole(stream.get("nb_frames")),
+            )
+            for stream in found
+        ),
     )
 
 
@@ -260,7 +280,12 @@ def streams(path: str | Path) -> tuple[Stream, ...]:
     One ffprobe call, no decoding at all -- this is the cheapest thing in the
     library, and the checks built on it cost roughly nothing to leave switched on.
     """
-    return _streams(_fingerprint(Path(path)))
+    return _probe(_fingerprint(Path(path))).streams
+
+
+def container(path: str | Path) -> str:
+    """The container's `format_name`, from the same probe as `streams`."""
+    return _probe(_fingerprint(Path(path))).container
 
 
 def tail_level(path: str | Path, seconds: float = 0.25) -> float:
@@ -391,7 +416,14 @@ class Picture(NamedTuple):
     """How the light in one frame is distributed, from `signalstats`."""
 
     low: float
-    """Luma at the bottom of the distribution (`YLOW`), on ffmpeg's 0-255 scale."""
+    """Luma at the bottom of the distribution (`YLOW`), on a 0-255 scale.
+
+    0-255 is guaranteed by converting to 8-bit before measuring, not assumed:
+    signalstats reports in the *source's* bit depth, so a 10-bit frame reads
+    0-1023 and solid black comes back as 64 rather than 16. Left alone, every
+    threshold here would be four times less sensitive on 10-bit material and
+    the shade classifier would misname a black frame.
+    """
 
     high: float
     """Luma at the top of the distribution (`YHIGH`)."""
@@ -412,7 +444,17 @@ def _signalstats(fingerprint: tuple[str, int, int]) -> Picture:
             "-frames:v",
             "1",
             "-vf",
-            "signalstats,metadata=print:file=-",
+            # `format=gray` first, so the numbers are always on the 0-255 scale
+            # the thresholds are written for. signalstats reports in the source's
+            # own bit depth otherwise: measured on a 10-bit black frame, YLOW and
+            # YHIGH both read 64 rather than 16.
+            #
+            # `select=eq(n\\,0)` because `-frames:v 1` bounds the *output*, not
+            # the filter graph -- measured, the graph emits two metadata blocks
+            # for one output frame. Without this the reading depends on how far
+            # ahead ffmpeg happened to run, which is not something a verdict can
+            # rest on.
+            "select=eq(n\\,0),format=gray,signalstats,metadata=print:file=-",
             "-f",
             "null",
             "-",
@@ -421,12 +463,13 @@ def _signalstats(fingerprint: tuple[str, int, int]) -> Picture:
     # stdout, not stderr. Every other parser in this module reads stderr because
     # that is where ffmpeg's filters log; `metadata=print:file=-` is different --
     # the `-` is a real file argument meaning stdout, and stderr comes back empty.
-    found = {
-        key: float(value)
-        for key, value in re.findall(
-            r"lavfi\.signalstats\.Y(LOW|HIGH)=([\d.]+)", proc.stdout
-        )
-    }
+    found: dict[str, float] = {}
+    for key, value in re.findall(
+        r"lavfi\.signalstats\.Y(LOW|HIGH)=([\d.]+)", proc.stdout
+    ):
+        # First reading wins: belt and braces alongside the select above, since
+        # a dict comprehension would silently keep the last.
+        found.setdefault(key, float(value))
     if "LOW" not in found or "HIGH" not in found:
         raise ToolUnavailable(f"signalstats read no luma distribution from {path}")
     return Picture(low=found["LOW"], high=found["HIGH"])

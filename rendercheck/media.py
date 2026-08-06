@@ -250,6 +250,15 @@ def assert_audio_format(
         skip(f"audio format: {media} declares no audio stream")
         return
 
+    # Which requested fields the container could actually answer. A skip is only
+    # honest when *nothing* was compared: `skip()` plus a successful comparison
+    # leaves this returning None with a warning recorded, and the CLI reports the
+    # whole check as SKIP -- so a channel count that was checked and matched
+    # reads as unmeasured, and under --strict turns a correct file into a
+    # failure. Collect the reasons and only raise them if none of it landed.
+    unreadable: list[str] = []
+    compared = 0
+
     for name, want, got, unit in (
         ("sample rate", sample_rate, audio.sample_rate, " Hz"),
         ("channel count", channels, audio.channels, ""),
@@ -257,8 +266,9 @@ def assert_audio_format(
         if want is None:
             continue
         if got is None:
-            skip(f"audio format: {media} declares no {name}")
+            unreadable.append(name)
             continue
+        compared += 1
         if got != want:
             extra = ""
             if name == "channel count":
@@ -278,6 +288,9 @@ def assert_audio_format(
                 f"{media} has a {name} of {got}{unit}, not the {want}{unit} "
                 f"asked for{extra}"
             )
+
+    if unreadable and not compared:
+        skip(f"audio format: {media} declares no {' or '.join(unreadable)}")
 
 
 def assert_duration(
@@ -450,22 +463,30 @@ def _one(media: str | Path, kind: str) -> _ffmpeg.Stream | None:
     return next((s for s in _ffmpeg.streams(media) if s.kind == kind), None)
 
 
-# Codecs that carry a picture rather than a moving image. Deliberately not an
-# extension list: the question is what ffmpeg decoded, not what the file was
-# named. `gif` and `webp` are absent because both can be animated -- for those
-# the frame count settles it.
-_STILL_CODECS = frozenset({"png", "mjpeg", "bmp", "tiff", "ppm", "jpeg2000"})
+# Containers that carry either a still or a sequence, where the frame count is
+# what settles it. Everything else is decided by the container name alone.
+_EITHER_WAY = frozenset({"gif", "webp", "apng"})
 
 
-def _is_still(video: _ffmpeg.Stream) -> bool:
-    """Whether this video stream is one frame rather than a sequence.
+def _is_still(media: str | Path) -> bool:
+    """Whether this file is one picture rather than a moving image.
 
-    Container metadata cannot answer this on its own -- a Matroska of real video
-    declares neither a duration nor a frame count, which is exactly what a .png
-    declares. Only the codec distinguishes them.
+    Read from the **container**, not the codec. The codec cannot answer it: a
+    `.jpg` and a Matroska full of motion JPEG both report `mjpeg`, and neither
+    declares a frame count, so a codec test calls a real video a still and
+    quietly switches off its frame-rate and variable-rate checks. ffmpeg names
+    single-image containers `image2` or `*_pipe` -- `png_pipe`, `jpeg_pipe` --
+    and that separates the two cleanly.
     """
-    if video.codec in _STILL_CODECS:
-        return video.frames is None or video.frames <= 1
+    try:
+        names = set(_ffmpeg.container(media).split(","))
+    except ToolUnavailable:
+        return False
+    if any(name.endswith("_pipe") for name in names) or "image2" in names:
+        return True
+    if names & _EITHER_WAY:
+        video = _one(media, "video")
+        return video is not None and video.frames is not None and video.frames <= 1
     return False
 
 
@@ -580,7 +601,7 @@ def assert_format(
 
     if fps is None:
         return
-    if _is_still(video):
+    if _is_still(media):
         # ffprobe describes a still as a video stream and invents a rate for it:
         # a .png reports 25 fps, a .jpg reports 25 fps and a 0.04s duration. Both
         # are ffmpeg's defaults for a file that has no rate at all, so comparing
@@ -766,6 +787,18 @@ def assert_not_blank(image: str | Path, *, min_spread: float = 16.0) -> float | 
     """
     existing(image)
     try:
+        if not _is_still(image):
+            # An animated .gif or .webp reaches here through the CLI's image
+            # planner, and judging it on its first frame is wrong: a clip that
+            # opens on a dark leader is not a blank canvas, and failing it says
+            # the render is empty when it is fine. A flat *sequence* is
+            # assert_not_frozen's question, and it answers it whatever colour
+            # the picture is.
+            skip(
+                f"blank: {image} is a moving picture, not a still -- "
+                f"a picture that never changes is caught by the frozen check"
+            )
+            return None
         picture = _ffmpeg.signalstats(image)
     except ToolUnavailable as exc:
         skip(f"blank: {exc}")
