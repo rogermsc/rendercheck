@@ -6,6 +6,78 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-05
+
+A review of 0.4.0 found fifteen defects in code published hours earlier — the
+same shape of round as 0.3.1, and the same lesson: the checks whose *own* logic
+can be wrong need adversarial reading, not just passing tests. Every one below
+was reproduced before it was fixed. **Upgrade from 0.4.0.**
+
+### Fixed — wrong verdicts
+
+- **A blank canvas read the second frame, not the first.** `-frames:v 1` bounds
+  ffmpeg's *output*, not its filter graph — measured, the graph emits two
+  metadata blocks — and the parser kept the last match. The verdict depended on
+  how far ahead ffmpeg happened to run. Now pinned to frame 0 explicitly.
+- **`assert_not_blank` failed animated GIFs and WebPs.** The CLI routes every
+  image extension into it, so a clip opening on a dark leader was reported as an
+  empty render. It now skips a moving picture and says why; a flat *sequence* is
+  `assert_not_frozen`'s question and always was.
+- **`assert_format` treated real MJPEG video as a still**, silently disabling
+  the frame-rate and variable-rate checks for a whole codec family. A `.jpg` and
+  a Matroska full of motion JPEG both report `mjpeg` and neither declares a
+  frame count, so the codec can never answer this. Read from the container now.
+- **The playground reported digital silence as unmeasurable.** loudnorm writes
+  `-inf`, and JavaScript's `parseFloat("-inf")` is `NaN`, not `-Infinity` — so
+  the FAIL branch was unreachable and the flagship defect fell through to SKIP.
+  Python's `float()` parses it directly, which is why only one side had this.
+- **On a still, `--expect-sample-rate` and `--expect-channels` were silently
+  discarded** and the run went green — a requirement the caller typed, never
+  compared and never mentioned.
+- **`assert_audio_format` reported a check that passed as skipped.** One
+  unreadable field made the whole check SKIP even when the other was compared
+  and matched, which under `--strict` turns a correct file into a failure.
+- **Luma thresholds were four times less sensitive on 10-bit material.**
+  `signalstats` reports in the source's own bit depth, so solid black reads 64
+  rather than 16 and the shade classifier misnamed it. Converted before
+  measuring, so the scale is 0–255 by construction rather than by assumption.
+
+### Fixed — the MCP server
+
+- **It read `rendercheck.toml` from its own working directory**, not from beside
+  the media, so a stray config where the client happened to launch it rewrote
+  every verdict. Measured: a clean −16 LUFS file failed against a `-40` target
+  it had nothing to do with.
+- **`strict` from the config file was ignored**, so the same file got a lenient
+  verdict here and a strict one from the CLI.
+- **A rubric line beginning with a dash killed the call.** Prose written by a
+  model starts with one often enough; argparse read it as an option. There is no
+  argv spelling that avoids this for a multi-value option, so both list
+  arguments now bypass the parser.
+
+### Fixed — the GitHub Action
+
+- **A single path containing a space was still split in two.** The 0.4.0 fix
+  covered the multi-line form only; the one-line fallback re-split it. It now
+  asks the filesystem, which is unambiguous where the string is not.
+- **A multi-line `args:` block lost every flag after the first line** — silently,
+  with the job still green. A gate that was asked for and never ran is exactly
+  what this project exists to catch.
+
+### Changed
+
+- **`assert_loudness_range` is off unless `--max-lra` is given**, matching true
+  peak. It shipped default-on at a threshold calibrated against this library's
+  own sine-tone fixtures; legitimately dynamic material runs wider than that
+  without being broken, and a gate nobody asked for that fails yesterday's files
+  is a regression rather than a check.
+- The promptfoo example takes its extension lists from the CLI instead of
+  retyping them — the hand-copied version was already missing `.m4v`, `.mpg` and
+  `.mpeg`, which were graded on audio alone.
+- Three tests took pytest's `tmp_path`, which broke the plain-script mode that
+  CONTRIBUTING claims for every test file — a claim widened in the same release
+  that falsified it. All five files run standalone again.
+
 ## [0.4.0] - 2026-08-05
 
 Three checks whose measurements were already being decoded and thrown away, and
@@ -369,7 +441,8 @@ reachable only from Python (`--min-wpm`, `--loudness-tol`, `--duration-tol`,
   the file's `(path, mtime, size)` so a re-render is never served a stale
   reading.
 
-[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rogermsc/rendercheck/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/rogermsc/rendercheck/releases/tag/v0.4.1
 [0.4.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.4.0
 [0.3.1]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.1
 [0.3.0]: https://github.com/rogermsc/rendercheck/releases/tag/v0.3.0

@@ -1,6 +1,6 @@
 {
   "name": "rendercheck",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Assertions for AI-generated media. The worst bugs in generated video and audio don't throw \u2014 pace, loudness, truncation, dead air, black frames. rendercheck makes them throw.",
   "bin": {
     "rendercheck": "bin/rendercheck.js"

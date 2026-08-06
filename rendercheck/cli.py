@@ -153,9 +153,16 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
                     height=args.expect_height,
                 ),
             )
+        # Every flag that cannot apply here has to be named. Silently dropping
+        # one is the failure the comment above exists to prevent, and the two
+        # audio-format flags were doing exactly that: a still asked for
+        # `--expect-sample-rate 48000` reported "1 passed" and exit 0, having
+        # never compared the requirement the caller typed.
         for flag, given in (
             ("--expect-fps", args.expect_fps),
             ("--expect-seconds", args.expect_seconds),
+            ("--expect-sample-rate", args.expect_sample_rate),
+            ("--expect-channels", args.expect_channels),
         ):
             if given:
                 yield Planned(
@@ -221,10 +228,17 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
                 "true peak",
                 partial(assert_true_peak, path, max_dbtp=args.max_true_peak),
             )
-        yield Planned(
-            "loudness range",
-            partial(assert_loudness_range, path, max_lra=args.max_lra),
-        )
+        # Off unless asked for, exactly like true peak and for the same reason:
+        # inventing a ceiling starts failing files that were fine yesterday.
+        # The default was calibrated against this library's own sine-tone
+        # fixtures, and legitimately dynamic material -- a music bed, a drama
+        # mix, broadcast content -- routinely runs wider than it without being
+        # broken. A gate nobody asked for is not a gate, it is a regression.
+        if args.max_lra is not None:
+            yield Planned(
+                "loudness range",
+                partial(assert_loudness_range, path, max_lra=args.max_lra),
+            )
         # Only when asked for, like true peak: there is no universal sample rate
         # or channel count, only the one your delivery spec states.
         if args.expect_sample_rate or args.expect_channels:
@@ -392,8 +406,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-lra",
         type=float,
-        default=15.0,
-        help="widest acceptable swing between quiet and loud parts, in LU",
+        help=(
+            "widest acceptable swing between quiet and loud parts in LU; "
+            "off unless given, like --max-true-peak"
+        ),
     )
     parser.add_argument(
         "--min-image-spread",
@@ -472,7 +488,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _parse(
-    argv: Sequence[str] | None, *, use_config: bool = True
+    argv: Sequence[str] | None,
+    *,
+    use_config: bool = True,
+    config_from: Path | None = None,
 ) -> argparse.Namespace:
     """Parse, layering the config file and then the preset under the flags.
 
@@ -481,13 +500,18 @@ def _parse(
     `rendercheck.toml` said. A flag someone typed is a decision; the rest are
     starting points.
 
+    `config_from` says where to start looking. The CLI leaves it None, which
+    searches upward from the working directory -- that is the shell's own
+    context and what a person typing a command means. A long-lived server has no
+    such context, so it passes the directory holding the media instead.
+
     `use_config=False` is for the demo, whose output has to be the same
     everywhere -- a threshold from the reader's own project would quietly change
     what the demo claims to prove.
     """
     parser = _parser()
     if use_config:
-        settings = _from_config(parser)
+        settings = _from_config(parser, start=config_from)
         if settings:
             parser.set_defaults(**settings)
 
@@ -508,7 +532,9 @@ def _parse(
     return parser.parse_args(argv)
 
 
-def _from_config(parser: argparse.ArgumentParser) -> dict[str, object]:
+def _from_config(
+    parser: argparse.ArgumentParser, *, start: Path | None = None
+) -> dict[str, object]:
     """Settings from the config file, validated the way argparse would have.
 
     `set_defaults` bypasses every guarantee the flag path gives: no `type=`, no
@@ -521,7 +547,7 @@ def _from_config(parser: argparse.ArgumentParser) -> dict[str, object]:
     # argparse has no public way to enumerate actions, so a throwaway parse
     # yields the destinations and the parser itself yields their types.
     actions = {a.dest: a for a in parser._actions if a.option_strings}
-    settings = config.load(known=set(actions))
+    settings = config.load(start=start, known=set(actions))
 
     checked: dict[str, object] = {}
     for key, value in settings.items():

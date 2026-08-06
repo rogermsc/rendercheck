@@ -534,12 +534,20 @@
           ]);
         } else {
           const blob = audio.match(/\{[^{}]*"input_i"[^{}]*\}/s);
-          const loudness = blob ? parseFloat(JSON.parse(blob[0]).input_i) : NaN;
+          // loudnorm writes digital silence as the string "-inf", and
+          // parseFloat("-inf") is NaN, not -Infinity -- JS only accepts
+          // "-Infinity". The old `!isFinite(l) && l < 0` test could therefore
+          // never be true, so the flagship defect fell through to "loudnorm
+          // measured nothing" and reported SKIP instead of FAIL. Python's
+          // float() parses "-inf" directly, which is why only this side had it.
+          const raw = blob ? String(JSON.parse(blob[0]).input_i).trim() : "";
+          const silent = /^-inf(inity)?$/i.test(raw);
+          const loudness = parseFloat(raw);
 
-          if (!isFinite(loudness) && loudness < 0) {
+          if (silent) {
             results.push([
               "FAIL", "loudness",
-              `${shown} carries an audio stream but it is digital silence -- every sample is zero, which is what a failed render or a muted mix looks like`,
+              `${shown} carries an audio stream but it is digital silence -- every sample in it is zero, so it will play as nothing at all, which is what a failed synthesis or a muted mix looks like from the outside`,
             ]);
           } else if (Number.isNaN(loudness)) {
             results.push(["SKIP", "loudness", "loudnorm measured nothing"]);

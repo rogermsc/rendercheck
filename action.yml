@@ -68,22 +68,31 @@ runs:
         EXTRA: ${{ inputs.args }}
       run: |
         # Arrays rather than one flat string. `files` was expanded unquoted so
-        # that several paths could be given at once, which also meant any path
-        # containing a space was split into two paths that do not exist. One
-        # path per line keeps spaces intact; a single line is still word-split,
-        # so `files: "a.mp4 b.mp4"` keeps working exactly as before.
+        # that several paths could be given at once, which also split any path
+        # containing a space into two paths that do not exist.
+        #
+        # One path per line is the unambiguous form and always wins. A single
+        # line is ambiguous -- "my video.mp4" and "a.mp4 b.mp4" are the same
+        # shape -- so ask the filesystem: if the whole line is a path that
+        # exists, it is one path. Only if it is not do we fall back to
+        # word-splitting, which keeps `files: "a.mp4 b.mp4"` working.
         targets=()
         while IFS= read -r line; do
           [ -n "$line" ] && targets+=("$line")
         done <<< "$FILES"
-        if [ "${#targets[@]}" -le 1 ]; then
+        if [ "${#targets[@]}" -le 1 ] && [ ! -e "$FILES" ]; then
           read -ra targets <<< "$FILES"
         fi
 
         flags=()
         if [ "$STRICT" = "true" ]; then flags+=(--strict); fi
         if [ -n "$PRESET" ]; then flags+=(--preset "$PRESET"); fi
+
+        # Newlines folded to spaces first: `read -ra` stops at the first
+        # newline, so a multi-line `args:` block silently lost every flag after
+        # the first line and the job still went green. A gate that was asked for
+        # and never ran is the failure this whole project is against.
         extra=()
-        if [ -n "$EXTRA" ]; then read -ra extra <<< "$EXTRA"; fi
+        if [ -n "$EXTRA" ]; then read -ra extra <<< "${EXTRA//$'\n'/ }"; fi
 
         rendercheck check "${targets[@]}" "${flags[@]}" "${extra[@]}"

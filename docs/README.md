@@ -121,6 +121,12 @@ passing no preset at all.
 
 ## `assert_loudness_range(media, *, max_lra=15.0)`
 
+Off by default on the command line, like true peak, and switched on by
+`--max-lra`. Legitimately dynamic material — a music bed, a drama mix, broadcast
+content — runs wider than any figure calibrated on speech, and a gate nobody
+asked for that starts failing yesterday's files is a regression rather than a
+check.
+
 Loudness range in LU — how far the level moves across the programme, which the
 integrated figure cannot tell you. A file whose quiet half sits 25 LU under its
 loud half still averages out to a respectable number.
@@ -164,7 +170,11 @@ colour as well as black, none of which `blackdetect` sees.
 
 **Stills only, deliberately.** A *video* holding one flat frame is already
 caught by `assert_not_frozen`, whatever colour it is; a still is the only case
-with no motion to compare against.
+with no motion to compare against. An animated `.gif` or `.webp` therefore
+**skips** here rather than being judged on its first frame — a clip that opens
+on a dark leader is not a blank canvas. Whether a file is a still is read from
+the *container* (`png_pipe`, `image2`), never the codec: a `.jpg` and a Matroska
+full of motion JPEG both report `mjpeg`.
 
 ## `assert_streams_aligned(media, *, max_gap=0.5, max_start_skew=0.25)`
 

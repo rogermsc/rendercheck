@@ -159,3 +159,32 @@ if __name__ == "__main__":
                 print(f"FAIL {name}: {exc}")
     print("docs ok" if not failures else f"{failures} failed")
     sys.exit(1 if failures else 0)
+
+
+def test_the_playground_detects_digital_silence():
+    # loudnorm writes `-inf` and JS parseFloat("-inf") is NaN, not -Infinity, so
+    # `!isFinite(l) && l < 0` could never be true and the flagship defect fell
+    # through to "loudnorm measured nothing". Python's float() parses it
+    # directly, which is why only the browser side carried this.
+    source = PLAYGROUND.read_text(encoding="utf-8")
+    assert "-inf(inity)?" in source, (
+        "the playground no longer tests for loudnorm's -inf string; a digitally "
+        "silent file will report SKIP instead of FAIL"
+    )
+    assert "!isFinite(loudness) && loudness < 0" not in source, (
+        "the unreachable digital-silence test is back"
+    )
+
+
+def test_the_action_disambiguates_a_single_path_containing_a_space():
+    # The 0.4.0 fix covered the multi-line form only: the one-line fallback
+    # re-split "my video.mp4" into two paths that do not exist.
+    action = (ROOT / "action.yml").read_text(encoding="utf-8")
+    assert '[ ! -e "$FILES" ]' in action, (
+        "action.yml word-splits a single line unconditionally again, so a path "
+        "containing a space is split into two paths that do not exist"
+    )
+    assert "${EXTRA//$'\\n'/ }" in action, (
+        "action.yml reads $EXTRA with `read -ra` alone again, which stops at the "
+        "first newline and silently drops every flag after it"
+    )
