@@ -86,14 +86,14 @@ on the curve is.
 
 Set from 80 real avatar renders against 80 cross-paired nulls (each clip's
 picture against another clip's sound): this is the lowest threshold at which no
-null engages. It admits about 30% of real talking-head clips.
+null engages. Measured on 40 real renders, it admits 14 of them -- 35%.
 
-**Abstention is the design, not a shortfall.** The other 70% get a skip, because
+**Abstention is the design, not a shortfall.** The other 65% get a skip, because
 on those the peak does not stand clear enough to read a number off, and a number
 nobody measured is worse than no number.
 """
 
-BIAS_SECONDS = 0.36
+BIAS_SECONDS = 0.32
 """What this method reports for a file that is actually in sync.
 
 Frame-differencing peaks where the picture *changes* -- the mouth opening --
@@ -101,11 +101,18 @@ while amplitude peaks a beat later, in the middle of the vowel. A correctly
 synced file therefore reads as sound running about a third of a second late, and
 the constant is removed so that zero means zero.
 
-Measured across 80 HeyGen avatar renders, on the 24 the ratio gate admitted:
-mean 0.360 s, median 0.400 s, stdev 0.076 s, range 0.200-0.440, positive every
-time. Every one of those clips came from one provider at 1080p25 through one
-pipeline, so this is a *calibration*, not a constant of nature: pass `bias=` for
-material it was not measured against, or `bias=0.0` to see the raw reading.
+Measured by `bench/bench.py sync` on 40 HeyGen avatar renders, over the 14 the
+ratio gate admitted: mean 0.323 s, stdev 0.091 s, range 0.200-0.480, positive
+every time. See docs/calibration.md.
+
+Every one of those clips came from one provider at 1080p25 through one pipeline,
+so this is a *calibration*, not a constant of nature: pass `bias=` for material
+it was not measured against, or `bias=0.0` to see the raw reading.
+
+**Re-measure it whenever the extraction changes.** It is a property of this
+estimator, not of the world, and it moves when the estimator does -- which is
+what `bench/bench.py` is for and why the synthetic fixture in tests/ asserts
+that a file with a true offset of zero still reads as zero.
 """
 
 MIN_DUTY = 0.70

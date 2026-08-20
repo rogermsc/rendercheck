@@ -654,7 +654,15 @@ def _tracks(fingerprint: tuple[str, int, int]) -> Tracks:
     # fps FIRST in the chain: it makes frame index -> time exactly 1/25 s
     # whatever the source rate, which is what stops a variable-rate file from
     # manufacturing drift. format before scale scales one plane instead of
-    # three; `area` is a true box average rather than a few bicubic taps.
+    # three.
+    #
+    # `flags=area` is a true box average rather than a few bicubic taps, which
+    # sounds like it should matter for fine mouth motion and measurably does
+    # not: across 40 real renders it changed neither how many clips the check
+    # could speak about (14 of 40 either way) nor the calibration constant
+    # (+0.323 s against +0.329 s). Kept because a box average is the honest
+    # thing to ask for when reducing a frame to 256 cells, not because it buys
+    # anything.
     raw = _run_raw(
         "ffmpeg",
         [

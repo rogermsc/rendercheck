@@ -904,17 +904,19 @@ def assert_lip_sync(
     shift that lines them up is the offset. No face detection, no model, no
     dependency.
 
-    **It abstains more often than it answers, on purpose.** On about 30% of
+    **It abstains more often than it answers, on purpose.** On about a third of
     talking-head clips the correlation peak stands clear enough to read a number
     off; on the rest it skips. A peak that does not stand clear is not a small
     offset, it is no measurement, and this library would rather say so.
 
     **It is not a sync certification.** EBU R37 and ITU-R BT.1359 put
     detectability at +40 ms of audio lead and -60 ms of lag -- four to seven
-    times finer than this resolves. Measured on 80 real avatar renders: among
-    the clips it engages on, it catches 90% of 0.4 s errors and 94% of 0.5 s
-    errors with no false positives, and nothing below 0.2 s. It finds a broken
-    pipeline; certifying a good one still needs a model.
+    times finer than this resolves. Measured by `bench/bench.py sync` on 40 real
+    avatar renders (see docs/calibration.md): it engaged on 14, caught 79% of
+    0.4 s errors and 89% of 0.5 s, missed nothing at 0.5 s or beyond, and
+    produced no false positives on the clean set -- 0 of 14, which is a 95%
+    upper bound of 21% rather than a rate. It finds a broken pipeline;
+    certifying a good one still needs a model.
 
     Returns the measured offset in seconds -- positive means the sound runs late
     -- or None if it could not be measured.

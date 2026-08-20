@@ -14,6 +14,7 @@ Neither was caught by anything. These tests are the cheapest thing that would
 have caught the first, and they run in CI on every push.
 """
 
+import inspect
 import json
 import re
 import sys
@@ -21,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rendercheck import mcp, presets
+from rendercheck import lipsync, mcp, media, presets
 
 ROOT = Path(__file__).resolve().parent.parent
 PLAYGROUND = ROOT / "docs" / "playground" / "index.html"
@@ -171,4 +172,36 @@ def test_the_action_disambiguates_a_single_path_containing_a_space():
     assert "${EXTRA//$'\\n'/ }" in action, (
         "action.yml reads $EXTRA with `read -ra` alone again, which stops at the "
         "first newline and silently drops every flag after it"
+    )
+
+
+def test_the_calibration_doc_still_describes_the_shipped_estimator():
+    """The published measurement and the constant it produced must agree.
+
+    `bias` is a property of the extraction, not of the world: change the
+    smoothing window or the grid and the number moves. Nothing else in the suite
+    can see that, because the estimator stays perfectly self-consistent while
+    describing something the docs no longer match -- which happened once, cost
+    two rounds of re-measurement, and is why this exists.
+    """
+    doc = ROOT / "docs" / "calibration.md"
+    assert doc.exists(), "docs/calibration.md is missing -- run bench/bench.py"
+    text = doc.read_text(encoding="utf-8")
+
+    found = re.search(r"recommended: bias=([\d.-]+), max_offset=([\d.]+)", text)
+    assert found, "no `recommended:` line in docs/calibration.md"
+    measured_bias, measured_offset = float(found.group(1)), float(found.group(2))
+
+    assert abs(lipsync.BIAS_SECONDS - measured_bias) <= 0.02, (
+        f"lipsync.BIAS_SECONDS is {lipsync.BIAS_SECONDS} but the last "
+        f"calibration run measured {measured_bias}. Either the estimator "
+        f"changed and bench/bench.py needs rerunning, or the constant was "
+        f"edited by hand."
+    )
+
+    shipped = inspect.signature(media.assert_lip_sync).parameters["max_offset"].default
+    assert shipped >= measured_offset, (
+        f"max_offset ships at {shipped}, tighter than the {measured_offset} the "
+        f"calibration supports. A threshold below the method's own noise floor "
+        f"fails clean files."
     )

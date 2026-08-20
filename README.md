@@ -414,8 +414,20 @@ renders narrated video at scale:
 | Four episodes rendered *before* that fix | **fails** at −19.4 to −21.3 LUFS |
 
 It drew the line exactly where the fix landed, on files it was never told
-anything about, agreeing with a conclusion humans had reached months earlier —
-and produced no false positives across the clean set.
+anything about, agreeing with a conclusion humans had reached months earlier.
+
+**That table is an anecdote, and it is labelled as one.** The media is private,
+so nobody — including its author — can rerun it. The numbers you *can* check are
+in [docs/calibration.md](docs/calibration.md), produced by `bench/bench.py`:
+
+```bash
+python bench/bench.py sync        # no network, no corpus, about a minute
+```
+
+That script injects defects of known size into media with a known answer and
+counts what each check actually said, with abstentions in the denominator and a
+rule-of-three bound printed next to every zero. Where a threshold in this
+library has a measured provenance, that is where it came from.
 
 ## Two promises
 
@@ -472,8 +484,8 @@ worse than none:
   second out of time with its voice, with no face detection and no model. Two
   things it cannot do. It cannot resolve the errors that actually matter
   perceptually — EBU R37 puts detectability at +40 ms of audio lead and −60 ms
-  of lag, and this reports nothing under 200 ms. And it declines to answer on
-  about seven files in ten, because on those the correlation peak does not stand
+  of lag, and this catches under a third of 200 ms errors. And it declines to answer on
+  about two files in three, because on those the correlation peak does not stand
   clear enough to read a number off. It finds a broken pipeline; it does not
   certify a good one, and that still needs a model
   ([SyncNet](https://github.com/joonson/syncnet_python) and friends).

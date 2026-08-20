@@ -251,7 +251,7 @@ Returns the measured offset in seconds; positive means the captions run late.
 
 [ffsubsync]: https://github.com/smacke/ffsubsync
 
-## `assert_lip_sync(media, *, max_offset=0.30, max_drift=0.50, bias=0.36, min_ratio=2.10, min_duty=0.70)`
+## `assert_lip_sync(media, *, max_offset=0.30, max_drift=0.50, bias=0.32, min_ratio=2.10, min_duty=0.70)`
 
 Whether the mouth moves when the voice does. This is the failure every
 talking-head generator ships and nothing else here can see: the container is
@@ -281,16 +281,22 @@ What separates a real alignment from a coincidence is how far the peak stands
 above the best rival elsewhere in the search, and `min_ratio` is the lowest
 value at which none of 80 cross-paired nulls engaged.
 
-**It abstains about seven times in ten, on purpose.** A peak that does not stand
+**It abstains about two times in three, on purpose.** A peak that does not stand
 clear is not a small offset — it is no measurement. `SKIP` here means "could not
 tell", never "fine". It also skips a picture that is not a talking head at all:
 `min_duty` is the share of frames that must be moving, and across 150 avatar
 renders and 150 composed lesson videos the medians are 0.87 and 0.007.
 
-**What it is worth, measured.** On 80 real avatar renders, among the clips it
-engages on: 90% of 0.4 s errors caught, 94% of 0.5 s, 100% from 0.75 s up, and
-no false positives on the clean set (0/24; the 95% upper bound from that sample
-size is 12.5%). Nothing below 0.2 s.
+**What it is worth, measured.** Produced by `bench/bench.py sync` on 40 real
+avatar renders and published in [calibration.md](calibration.md): it engaged on
+14 of them, and among those caught 50% of 0.3 s errors, 79% of 0.4 s and 89% of
+0.5 s, with **no false positives on the clean set — 0 of 14**, which is a 95%
+upper bound of 21% rather than a rate.
+
+Two honest wrinkles in that table. Recall stops climbing past 0.5 s and dips to
+around 75%, but the losses are *abstentions*, not misses: from 0.5 s up it never
+once said a desynced file was fine. And 0 of 14 is a small number of clips; the
+bound is printed next to it precisely so it cannot be read as 0%.
 
 **It is not a sync certification.** EBU R37 and ITU-R BT.1359 put detectability
 at +40 ms of audio lead and −60 ms of lag, four to seven times finer than this
@@ -299,9 +305,15 @@ resolves. It finds a broken pipeline; certifying a good one needs a model.
 **`bias` is a calibration, not a constant of nature.** Frame-differencing peaks
 where the picture *changes* — the mouth opening — while amplitude peaks a beat
 later, mid-vowel, so a correctly synced file reads as sound running about a
-third of a second late. Measured on one provider at 1080p25: mean 0.360 s,
-stdev 0.076 s, positive every time. Pass `bias=` for material it was not
+third of a second late. Measured on one provider at 1080p25: mean 0.323 s,
+stdev 0.091 s, positive every time. Pass `bias=` for material it was not
 measured against, or `bias=0.0` to see the raw reading.
+
+It is a property of *this estimator*, so it moves when the extraction moves —
+which is why the synthetic fixture in the test suite asserts that a file with a
+true offset of zero still reads as zero. Changing the smoothing window or the
+grid without re-running `bench/bench.py` leaves a constant describing code that
+no longer exists.
 
 **Tune it up** if you only care about desync bad enough to be obvious. **Tune it
 down** and you will start reporting the method's own noise: the spread among

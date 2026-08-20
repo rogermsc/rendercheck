@@ -17,13 +17,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Off by default (`--lip-sync`): it costs a second full video decode, its zero
   point is calibrated against one provider's output, and it declines to answer
-  on roughly seven files in ten.
+  on roughly two files in three.
 
-  **What it is worth, measured on 80 real avatar renders.** Among the clips it
-  engages on: 90% of 0.4 s errors caught, 94% of 0.5 s, 100% from 0.75 s up, no
-  false positives on the clean set (0/24 — the 95% upper bound at that sample
-  size is 12.5%), nothing below 0.2 s. It is not a sync certification: EBU R37
-  puts detectability four to seven times finer than this resolves.
+  **What it is worth, measured.** `bench/bench.py sync` on 40 real avatar
+  renders, published in `docs/calibration.md`: engaged on 14, and among those
+  caught 79% of 0.4 s errors and 89% of 0.5 s, with no false positives on the
+  clean set (0 of 14 — a 95% upper bound of 21%, not a rate). Past 0.5 s it
+  never calls a desynced file fine; what it does instead is abstain more. It is
+  not a sync certification: EBU R37 puts detectability four to seven times finer
+  than this resolves.
+
+- **`bench/bench.py`** — where the thresholds come from, as a script rather than
+  as prose. It injects defects of known size into media with a known answer and
+  counts what each check actually said, publishing the result to
+  `docs/calibration.md`. Three studies so far: `sync`, `dead-air`, `captions`.
+
+  Two rules it follows. Abstentions live in the recall denominator, because
+  these checks have three outcomes and moving skips out of the denominator is
+  how a tool flatters itself. And every zero gets its rule-of-three bound
+  printed beside it — "0 false positives in 14 clips" is a fact, "0%" from 14
+  clips is a fabrication.
+
+  It found two things on its first real run: `assert_captions_aligned`'s
+  `max_offset=0.75`, which had no stated provenance, sits exactly where the
+  detector crosses 50% recall; and `assert_lip_sync`'s bias constant had been
+  measured against a prototype and never re-measured after the extraction
+  changed. `tests/test_docs.py` now fails the build if the shipped constant and
+  the published measurement ever drift apart again.
 
 ### Fixed
 
