@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rendercheck import presets
+from rendercheck import mcp, presets
 
 ROOT = Path(__file__).resolve().parent.parent
 PLAYGROUND = ROOT / "docs" / "playground" / "index.html"
@@ -81,26 +81,10 @@ def test_the_playground_declares_every_check_it_does_not_run():
     named = set(re.findall(r'"(?:PASS|FAIL|SKIP)", "([a-z ]+)"', source))
     named |= set(re.findall(r'^\s*\["([a-z ]+)", "', source, re.M))
 
-    expected = {
-        "has sound",
-        "loudness",
-        "loudness range",
-        "true peak",
-        "dead air",
-        "truncation",
-        "clipping",
-        "duration",
-        "captions",
-        "streams",
-        "format",
-        "audio format",
-        "black frames",
-        "frozen",
-        "blank",
-        "pace",
-        "speaker",
-        "looks ok",
-    }
+    # Derived from the library, never hand-listed. A hardcoded set silently
+    # stops covering the next check that gets added -- which is precisely the
+    # failure this test exists to prevent, one level up.
+    expected = {entry["check"] for entry in mcp._describe()["checks"]}
     missing = expected - named
     assert not missing, (
         f"the playground neither runs nor declares: {sorted(missing)}. "

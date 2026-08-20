@@ -12,6 +12,7 @@ pass and memoised against the file's identity — see `measure()`.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -588,3 +589,163 @@ def measure(
     question and get their own decode.
     """
     return _measure(_fingerprint(Path(path)), threshold_db, min_seconds)
+
+
+def _run_raw(binary: str, args: list[str]) -> bytes:
+    """`_run`, for a filter graph whose output is the picture itself.
+
+    A sibling rather than a `text=` flag on `_run`: making that return
+    `CompletedProcess[str] | CompletedProcess[bytes]` forces every existing
+    caller to narrow the union under `mypy --strict`, which is a lot of churn to
+    share nine lines.
+
+    stderr is discarded unless nothing came back -- everything this path reads
+    is in the bytes, and an empty pipe is the only failure it can see.
+    """
+    if shutil.which(binary) is None:
+        raise ToolUnavailable(f"{binary} is not on PATH")
+    try:
+        proc = subprocess.run([binary, *args], capture_output=True, timeout=_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ToolUnavailable(f"{binary} failed: {exc}") from exc
+    if not proc.stdout:
+        reported = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise ToolUnavailable(
+            f"{binary} decoded nothing from {args[-1]}: "
+            f"{reported[-1] if reported else 'no reason given'}"
+        )
+    return proc.stdout
+
+
+GRID = 16
+"""Frame is reduced to GRID x GRID luma cells. 16 measures the same offset as 8
+(identical to three decimals across fourteen clips) but gives the cell-selection
+in `lipsync.motion_from_cells` something to choose between."""
+
+_AUDIO_RATE = 8000
+"""8000 / 25 fps = 320 samples per analysis frame, exactly. No partial windows."""
+
+
+class Tracks(NamedTuple):
+    """One number per analysis frame, from each of the two streams."""
+
+    motion: list[float]
+    """How much the selected cells changed since the previous frame."""
+
+    whole: list[float]
+    """The same for the entire frame -- what `duty_cycle` is read from, because
+    applicability is a question about the picture, not about the mouth."""
+
+    envelope: list[float]
+    """Amplitude of the audio over that frame's span, log-compressed.
+
+    Compressed because raw RMS is dominated by the loudest few bursts while
+    motion energy is far more even; matching the two distributions lifted the
+    peak correlation from 0.179 to 0.216 across fourteen clips.
+    """
+
+
+@lru_cache(maxsize=2)
+def _tracks(fingerprint: tuple[str, int, int]) -> Tracks:
+    from . import lipsync
+
+    path = fingerprint[0]
+    cells = GRID * GRID
+    # fps FIRST in the chain: it makes frame index -> time exactly 1/25 s
+    # whatever the source rate, which is what stops a variable-rate file from
+    # manufacturing drift. format before scale scales one plane instead of
+    # three; `area` is a true box average rather than a few bicubic taps.
+    raw = _run_raw(
+        "ffmpeg",
+        [
+            "-nostdin",
+            "-an",
+            "-i",
+            path,
+            "-vf",
+            f"fps={lipsync.ANALYSIS_FPS:g},format=gray,scale={GRID}:{GRID}:flags=area",
+            "-pix_fmt",
+            "gray",
+            "-f",
+            "rawvideo",
+            "-",
+        ],
+    )
+    # Frame count from the byte stream, never from nb_frames (usually absent on
+    # generated media) and never from duration x fps (wrong on a VFR source).
+    frames = len(raw) // cells
+    if frames < 2:
+        raise ToolUnavailable(f"ffmpeg decoded {frames} frames from {path}")
+
+    # Two passes over the bytes rather than one materialised 256-list-of-floats:
+    # a three-minute clip would be a million Python floats, and the accumulators
+    # are 512 numbers. First pass takes each cell's mean and mean-square so the
+    # variance is available; second builds the track from the cells that won.
+    totals = [0.0] * cells
+    squares = [0.0] * cells
+    for frame in range(frames - 1):
+        here = (frame + 1) * cells
+        there = frame * cells
+        for cell in range(cells):
+            delta = float(abs(raw[here + cell] - raw[there + cell]))
+            totals[cell] += delta
+            squares[cell] += delta * delta
+    picked = set(lipsync.motion_from_cells(totals, squares, frames - 1))
+
+    motion, whole = [], []
+    for frame in range(frames - 1):
+        here = (frame + 1) * cells
+        there = frame * cells
+        chosen = every = 0
+        for cell in range(cells):
+            delta = abs(raw[here + cell] - raw[there + cell])
+            every += delta
+            if cell in picked:
+                chosen += delta
+        motion.append(float(chosen))
+        whole.append(float(every))
+
+    samples = _AUDIO_RATE // int(lipsync.ANALYSIS_FPS)
+    pcm = _run_raw(
+        "ffmpeg",
+        [
+            "-nostdin",
+            "-vn",
+            "-i",
+            path,
+            "-ac",
+            "1",
+            "-ar",
+            str(_AUDIO_RATE),
+            "-f",
+            "s16le",
+            "-",
+        ],
+    )
+    count = len(pcm) // 2
+    audio = memoryview(pcm)[: count * 2].cast("h")
+    envelope = []
+    for frame in range(len(motion)):
+        start = frame * samples
+        window = audio[start : start + samples]
+        if len(window) < samples:
+            envelope.append(0.0)
+            continue
+        mean_square = sum(value * value for value in window) / samples
+        envelope.append(math.log10(math.sqrt(mean_square) + 1.0))
+    return Tracks(motion=motion, whole=whole, envelope=envelope)
+
+
+def tracks(path: str | Path) -> Tracks:
+    """Per-frame picture motion and audio amplitude, for `assert_lip_sync`.
+
+    Two decodes, not one: a single process could carry both only by muxing to
+    `nut` on stdout or by parsing `astats` out of stderr, and the `-vn` audio
+    pass costs a few hundred milliseconds against the video pass's seconds.
+
+    ponytail: the whole decode is buffered -- 256 B per frame plus 16 KB/s of
+    audio, so a three-minute clip is about 2 MB. Stream it in chunks if someone
+    points this at a feature film. Cached two deep rather than the module's
+    usual 32: these are the only entries here holding lists per file.
+    """
+    return _tracks(_fingerprint(Path(path)))

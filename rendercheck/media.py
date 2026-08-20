@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import _ffmpeg
 from . import captions as _captions
+from . import lipsync as _lipsync
 from ._core import SilentFail, existing, skip, timestamp
 from ._ffmpeg import ToolUnavailable
 from .text import read_cues, read_script
@@ -879,4 +880,133 @@ def assert_not_frozen(media: str | Path, *, max_seconds: float = 3.0) -> float |
         f"the picture stops moving for {length:.1f}s at {timestamp(start)}, past "
         f"the {max_seconds:g}s limit -- a generated clip that freezes is a failed "
         f"render playing as a still, and it will not look intentional: {media}"
+    )
+
+
+def assert_lip_sync(
+    media: str | Path,
+    *,
+    max_offset: float = 0.30,
+    max_drift: float = 0.50,
+    bias: float = _lipsync.BIAS_SECONDS,
+    min_ratio: float = _lipsync.MIN_RATIO,
+    min_duty: float = _lipsync.MIN_DUTY,
+) -> float | None:
+    """Whether the mouth moves when the voice does.
+
+    The defect: an avatar render whose picture and speech have come apart. The
+    container is correct, both streams are valid, their durations agree, and
+    `assert_streams_aligned` passes -- because that check reads the container's
+    timing and this one is about the content. It is the most-reported failure of
+    every talking-head generator, and it survives every other check here.
+
+    Picture motion and audio amplitude are correlated against each other; the
+    shift that lines them up is the offset. No face detection, no model, no
+    dependency.
+
+    **It abstains more often than it answers, on purpose.** On about 30% of
+    talking-head clips the correlation peak stands clear enough to read a number
+    off; on the rest it skips. A peak that does not stand clear is not a small
+    offset, it is no measurement, and this library would rather say so.
+
+    **It is not a sync certification.** EBU R37 and ITU-R BT.1359 put
+    detectability at +40 ms of audio lead and -60 ms of lag -- four to seven
+    times finer than this resolves. Measured on 80 real avatar renders: among
+    the clips it engages on, it catches 90% of 0.4 s errors and 94% of 0.5 s
+    errors with no false positives, and nothing below 0.2 s. It finds a broken
+    pipeline; certifying a good one still needs a model.
+
+    Returns the measured offset in seconds -- positive means the sound runs late
+    -- or None if it could not be measured.
+    """
+    existing(media)
+    if not _require_video(media, "lip sync"):
+        return None
+    if not _ffmpeg.has_audio(media):
+        # Not `_require_audio`: a missing track is already assert_has_sound's
+        # failure, and a second sentence about it buries whatever else is wrong.
+        skip(f"lip sync: {media} has no audio stream -- nothing to line up against")
+        return None
+
+    try:
+        measured = _ffmpeg.tracks(media)
+    except ToolUnavailable as exc:
+        skip(f"lip sync: {exc}")
+        return None
+
+    seconds = len(measured.motion) * _lipsync.BIN_SECONDS
+    if seconds < _lipsync.MIN_SECONDS:
+        skip(
+            f"lip sync: {media} is {seconds:.0f}s, under the "
+            f"{_lipsync.MIN_SECONDS:g}s this needs -- a short clip's best "
+            f"alignment is whichever way the noise fell"
+        )
+        return None
+
+    duty = _lipsync.duty_cycle(measured.whole)
+    if duty < min_duty:
+        skip(
+            f"lip sync: {media} is not a talking head -- its picture moves in "
+            f"{duty:.0%} of frames, under the {min_duty:.0%} a presenter's face "
+            f"produces. Slides, b-roll and held shots read like this"
+        )
+        return None
+
+    fit = _lipsync.align(
+        measured.motion,
+        measured.envelope,
+        bias=bias,
+        min_ratio=min_ratio,
+    )
+    if fit is None:
+        skip(f"lip sync: {media} has no motion or no sound to correlate")
+        return None
+    if not fit.distinct:
+        skip(
+            f"lip sync: no alignment stood out for {media} -- the best fit is "
+            f"only {fit.ratio:.1f}x the next-best elsewhere in the search "
+            f"(needs {min_ratio:g}x), so any offset read off it would be noise"
+        )
+        return None
+
+    evidence = (
+        f"correlating picture motion against the speech envelope "
+        f"(peak {fit.peak:.2f}, {fit.ratio:.1f}x the best rival"
+        f"{f', method bias {bias:g}s removed' if bias else ''})"
+    )
+
+    # Drift leads. An offset is one delay away from correct; drift means no
+    # single delay fixes it, so reporting the offset first names the symptom and
+    # buries the cause. Drift is also the number that does not depend on `bias`.
+    if fit.drift is not None and abs(fit.drift) > max_drift:
+        return _drifting(media, fit, max_drift, evidence)
+
+    if abs(fit.offset) > max_offset:
+        late = fit.offset > 0
+        reads = (
+            "moves and the voice arrives afterwards"
+            if late
+            else "is still catching up with the voice"
+        )
+        raise SilentFail(
+            f"sound in {media} runs {abs(fit.offset):.2f}s "
+            f"{'late' if late else 'early'} against the picture, past the "
+            f"{max_offset:g}s limit -- the mouth "
+            f"{reads}, which reads as a dubbed clip. Measured by {evidence}; this "
+            f"resolves to about {_lipsync.SMOOTH_SECONDS * 0.5:g}s, so treat "
+            f"the number as a direction rather than a correction"
+        )
+    return fit.offset
+
+
+def _drifting(
+    media: str | Path, fit: _lipsync.Sync, max_drift: float, evidence: str
+) -> float:
+    """Raise for a clip whose offset changes across its own length."""
+    assert fit.drift is not None
+    raise SilentFail(
+        f"sound in {media} drifts {abs(fit.drift):.2f}s against the picture "
+        f"between its start and its end, past the {max_drift:g}s limit -- it is "
+        f"in time at one end and a beat out at the other, so no single delay "
+        f"corrects it. Measured by {evidence}"
     )

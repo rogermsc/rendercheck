@@ -6,6 +6,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`assert_lip_sync`** — a talking head whose mouth is out of time with its
+  voice, caught with no face detection, no model and no dependency. Picture
+  motion and the speech envelope are correlated against each other; the shift
+  that lines them up is the offset. `assert_streams_aligned` reads what the
+  *container* declares about its two streams, and passes on this defect;
+  this reads the content.
+
+  Off by default (`--lip-sync`): it costs a second full video decode, its zero
+  point is calibrated against one provider's output, and it declines to answer
+  on roughly seven files in ten.
+
+  **What it is worth, measured on 80 real avatar renders.** Among the clips it
+  engages on: 90% of 0.4 s errors caught, 94% of 0.5 s, 100% from 0.75 s up, no
+  false positives on the clean set (0/24 — the 95% upper bound at that sample
+  size is 12.5%), nothing below 0.2 s. It is not a sync certification: EBU R37
+  puts detectability four to seven times finer than this resolves.
+
+### Fixed
+
+- The playground's completeness guard listed the checks it expected **by hand**,
+  so it silently stopped covering anything added after it was written — which is
+  exactly the failure it exists to prevent, one level up. It now derives the set
+  from the library.
+- `README.md` claimed `demo` synthesises eight defective files. It has been ten
+  since 0.4.0, and the command prints the true count on its own first line.
+
+### Notes for anyone extending this
+
+Four things were measured and killed during the work, recorded so they are not
+re-derived:
+
+- **Absolute correlation is not evidence of alignment.** A clip correlated
+  against a *different clip's* audio peaks at 0.27 against a curve median of
+  0.00 — the top of the range real clips produce. The gate is the peak's ratio
+  to the best rival elsewhere in the search, never the peak.
+- **A search that runs out of range does not clamp — it fabricates.** At ±1.5 s
+  an offset past the range made the fit lock onto a noise peak near zero and
+  report a confident *small* number; recall fell from 98% at 0.5 s to 88% at
+  2.0 s. Widening to ±3.0 s made it monotonic. Same family as the 0.3.1
+  saturation lesson, but nastier, because nothing saturates.
+- **"Talking head, but nothing correlates" cannot be a failure.** It looks like
+  it should close the worst case — a head synced to entirely different audio —
+  but the duty-cycle gate admits 100% of talking-head clips while only 30% clear
+  the correlation gate, so the rule would fail 70% of clean files. That case
+  stays a miss, and is documented as one.
+- **Mouth-region selection by itself makes things worse.** Whole-frame motion
+  beat picking the busiest cell (offset spread 0.09 s against 0.13 s). Selecting
+  the busiest *tenth* helps; selecting *the* busiest does not.
+
 ## [0.4.1] - 2026-08-05
 
 A review of 0.4.0 found fifteen defects in code published hours earlier — the
