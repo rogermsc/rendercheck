@@ -141,6 +141,28 @@ not tell", never "fine".
 
 [ffsubsync]: https://github.com/smacke/ffsubsync
 
+## "The avatar's mouth doesn't match the audio"
+
+Also: "lipsync is fine in the tool but out of sync when I download it", "the
+sync drifts on longer clips", "it looks dubbed".
+
+```bash
+rendercheck check avatar.mp4 --lip-sync
+```
+
+`assert_lip_sync` correlates picture motion against the speech envelope. It is
+off by default and it declines to answer on most files — a `SKIP` saying no
+alignment stood out means it could not tell, not that the file is fine.
+
+Two other checks look adjacent and answer different questions. If the *container*
+says the streams cover different stretches of time, that is
+`assert_streams_aligned`, and it runs by default. If the *captions* are out
+against the audio, that is `assert_captions_aligned`. A file can pass both and
+still have a mouth a beat behind its voice, which is what this one is for.
+
+It catches gross desync — 0.4 s and worse. It cannot see the small errors that
+still read as wrong to a viewer; that needs a model.
+
 ## "The audio ends before the video does"
 
 A mux ran out of one of its inputs. The file is valid, the overall duration is

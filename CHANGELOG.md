@@ -6,6 +6,77 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`assert_lip_sync`** — a talking head whose mouth is out of time with its
+  voice, caught with no face detection, no model and no dependency. Picture
+  motion and the speech envelope are correlated against each other; the shift
+  that lines them up is the offset. `assert_streams_aligned` reads what the
+  *container* declares about its two streams, and passes on this defect;
+  this reads the content.
+
+  Off by default (`--lip-sync`): it costs a second full video decode, its zero
+  point is calibrated against one provider's output, and it declines to answer
+  on roughly two files in three.
+
+  **What it is worth, measured.** `bench/bench.py sync` on 40 real avatar
+  renders, published in `docs/calibration.md`: engaged on 14, and among those
+  caught 79% of 0.4 s errors and 89% of 0.5 s, with no false positives on the
+  clean set (0 of 14 — a 95% upper bound of 21%, not a rate). Past 0.5 s it
+  never calls a desynced file fine; what it does instead is abstain more. It is
+  not a sync certification: EBU R37 puts detectability four to seven times finer
+  than this resolves.
+
+- **`bench/bench.py`** — where the thresholds come from, as a script rather than
+  as prose. It injects defects of known size into media with a known answer and
+  counts what each check actually said, publishing the result to
+  `docs/calibration.md`. Three studies so far: `sync`, `dead-air`, `captions`.
+
+  Two rules it follows. Abstentions live in the recall denominator, because
+  these checks have three outcomes and moving skips out of the denominator is
+  how a tool flatters itself. And every zero gets its rule-of-three bound
+  printed beside it — "0 false positives in 14 clips" is a fact, "0%" from 14
+  clips is a fabrication.
+
+  It found two things on its first real run: `assert_captions_aligned`'s
+  `max_offset=0.75`, which had no stated provenance, sits exactly where the
+  detector crosses 50% recall; and `assert_lip_sync`'s bias constant had been
+  measured against a prototype and never re-measured after the extraction
+  changed. `tests/test_docs.py` now fails the build if the shipped constant and
+  the published measurement ever drift apart again.
+
+### Fixed
+
+- The playground's completeness guard listed the checks it expected **by hand**,
+  so it silently stopped covering anything added after it was written — which is
+  exactly the failure it exists to prevent, one level up. It now derives the set
+  from the library.
+- `README.md` claimed `demo` synthesises eight defective files. It has been ten
+  since 0.4.0, and the command prints the true count on its own first line.
+
+### Notes for anyone extending this
+
+Four things were measured and killed during the work, recorded so they are not
+re-derived:
+
+- **Absolute correlation is not evidence of alignment.** A clip correlated
+  against a *different clip's* audio peaks at 0.27 against a curve median of
+  0.00 — the top of the range real clips produce. The gate is the peak's ratio
+  to the best rival elsewhere in the search, never the peak.
+- **A search that runs out of range does not clamp — it fabricates.** At ±1.5 s
+  an offset past the range made the fit lock onto a noise peak near zero and
+  report a confident *small* number; recall fell from 98% at 0.5 s to 88% at
+  2.0 s. Widening to ±3.0 s made it monotonic. Same family as the 0.3.1
+  saturation lesson, but nastier, because nothing saturates.
+- **"Talking head, but nothing correlates" cannot be a failure.** It looks like
+  it should close the worst case — a head synced to entirely different audio —
+  but the duty-cycle gate admits 100% of talking-head clips while only 30% clear
+  the correlation gate, so the rule would fail 70% of clean files. That case
+  stays a miss, and is documented as one.
+- **Mouth-region selection by itself makes things worse.** Whole-frame motion
+  beat picking the busiest cell (offset spread 0.09 s against 0.13 s). Selecting
+  the busiest *tenth* helps; selecting *the* busiest does not.
+
 ## [0.4.1] - 2026-08-05
 
 A review of 0.4.0 found fifteen defects in code published hours earlier — the

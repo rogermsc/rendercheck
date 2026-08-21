@@ -26,6 +26,7 @@ from .media import (
     assert_duration,
     assert_format,
     assert_has_sound,
+    assert_lip_sync,
     assert_loudness,
     assert_loudness_range,
     assert_no_black_frames,
@@ -69,6 +70,7 @@ _UNITS = {
     "frozen": "s frozen",
     "captions": "s offset",
     "streams": "s between stream endings",
+    "lip sync": "s offset",
 }
 
 
@@ -302,6 +304,30 @@ def _plan(path: Path, args: argparse.Namespace) -> Iterator[Planned]:
         yield Planned(
             "frozen", partial(assert_not_frozen, path, max_seconds=args.max_freeze)
         )
+        # Off unless asked for, like true peak and loudness range. This one has
+        # its own reason on top of theirs: it costs a second full video decode,
+        # it declines to answer on most files, and its zero point is calibrated
+        # against one provider's output. A caller who types a threshold has
+        # asked for it just as surely as one who passes the flag.
+        lipsync_asked = (
+            args.lip_sync
+            or args.max_lipsync_offset is not None
+            or args.max_lipsync_drift is not None
+        )
+        if lipsync_asked:
+            thresholds = {}
+            if args.max_lipsync_offset is not None:
+                thresholds["max_offset"] = args.max_lipsync_offset
+            if args.max_lipsync_drift is not None:
+                thresholds["max_drift"] = args.max_lipsync_drift
+            yield Planned("lip sync", partial(assert_lip_sync, path, **thresholds))
+        else:
+            yield Planned(
+                "lip sync",
+                None,
+                "no --lip-sync given; it costs a second full video decode and "
+                "only sees gross desync, so it is off unless asked for",
+            )
         yield Planned(
             "streams",
             partial(
@@ -464,6 +490,25 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-freeze", type=float, default=3.0, help="longest acceptable frozen shot"
+    )
+    parser.add_argument(
+        "--lip-sync",
+        action="store_true",
+        help="correlate picture motion against the speech envelope on video; "
+        "off by default -- it costs a second full decode, skips on most files, "
+        "and only sees gross desync",
+    )
+    parser.add_argument(
+        "--max-lipsync-offset",
+        type=float,
+        default=None,
+        help="seconds the sound may sit away from the picture",
+    )
+    parser.add_argument(
+        "--max-lipsync-drift",
+        type=float,
+        default=None,
+        help="seconds the offset may change across the file",
     )
     parser.add_argument(
         "--duration-tol", type=float, default=0.5, help="allowed drift, in seconds"

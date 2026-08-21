@@ -695,6 +695,7 @@
           ["format", "needs the size and rate asked for -- run the CLI with --expect-width/--expect-height/--expect-fps"],
           ["audio format", "needs the rate and channel count asked for -- run the CLI with --expect-sample-rate/--expect-channels"],
           ["streams", "not implemented here yet; the CLI reads it from the container with no decoding"],
+          ["lip sync", "not implemented here on purpose -- it is a correlation search, a peak-to-rival gate and a calibration constant, and a second copy of that arithmetic would drift from the library's without any test able to see it. Run the CLI with --lip-sync"],
           ["blank", "stills are not accepted here yet -- run the CLI on a .png to check it"],
           ["speaker", "needs the script and the assigned presenter -- run the CLI with --script and --presenter"],
           ["looks ok", "needs an API key, which does not belong in a page that promises to upload nothing"],

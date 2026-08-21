@@ -116,6 +116,16 @@ _CHECK_SCHEMA = {
             "type": "boolean",
             "description": "Count a check that could not run as a failure.",
         },
+        "lip_sync": {
+            "type": "boolean",
+            "description": (
+                "Correlate picture motion against the speech envelope to catch a "
+                "talking head whose mouth is out of time with its voice. Off by "
+                "default: it costs a second full video decode, declines to answer "
+                "on most files, and sees only gross desync -- it cannot certify "
+                "broadcast sync tolerances."
+            ),
+        },
     },
     "required": ["path"],
 }
@@ -213,6 +223,8 @@ def _check(arguments: dict[str, Any]) -> dict[str, Any]:
             lists[key] = items
     if arguments.get("strict"):
         argv.append("--strict")
+    if arguments.get("lip_sync"):
+        argv.append("--lip-sync")
 
     # Resolved from the directory holding the media, not from the server's own
     # working directory. A long-lived server is started wherever the client
@@ -305,6 +317,7 @@ def _describe() -> dict[str, Any]:
         "has sound": media.assert_has_sound,
         "black frames": media.assert_no_black_frames,
         "frozen": media.assert_not_frozen,
+        "lip sync": media.assert_lip_sync,
         "captions": media.assert_captions_aligned,
         "streams": media.assert_streams_aligned,
         "format": media.assert_format,

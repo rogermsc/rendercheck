@@ -46,7 +46,7 @@ looks_ok("slide-14.png", ["the title fits on one line"])
 
 Plain assert functions. No framework, no runner, no service. They raise
 `AssertionError`, so they already work in pytest, in CI, or in a five-line
-script. Seventeen of the eighteen checks have **no dependencies and make no
+script. Eighteen of the nineteen checks have **no dependencies and make no
 network calls** — if you have `ffmpeg`, you're ready.
 
 ---
@@ -64,7 +64,7 @@ rendercheck demo
 Or drop a file into the **[playground](https://rogermsc.github.io/rendercheck/playground/)**
 — same checks, running on ffmpeg compiled to WebAssembly, nothing uploaded.
 
-`demo` synthesises eight defective files and runs the real checks against them,
+`demo` synthesises ten defective files and runs the real checks against them,
 so you can see it fire without owning a broken render. Verbatim, first two of
 eight:
 
@@ -169,7 +169,7 @@ def test_episode_is_shippable(episode):
 
 ## "Isn't this forty lines of pyloudnorm?"
 
-For one of the eighteen checks, roughly yes. None of these measurements are novel,
+For one of the nineteen checks, roughly yes. None of these measurements are novel,
 and it would be dishonest to imply otherwise:
 
 | The measurement | Already available from |
@@ -356,7 +356,7 @@ the top-right corner -- failed rubric item: 'the title fits on one line'
 
 This is the only check that needs a key: `pip install "rendercheck[vision]"`.
 
-## Twelve more, for defects other people keep reporting
+## Thirteen more, for defects other people keep reporting
 
 The six above came out of one pipeline. These came from reading other people's
 bug reports — the same complaint, filed against every provider in turn:
@@ -375,6 +375,7 @@ bug reports — the same complaint, filed against every provider in turn:
 | `assert_not_blank` | An image generator that failed and returned an empty canvas — reported against DALL·E, Stable Diffusion, Qwen, Gemini and Krita, always the same way: no error, no warning, correct dimensions, nothing on it. Catches any flat canvas, not only a black one; `blackdetect` sees none of the others. |
 | `assert_loudness_range` | A file with no single workable volume setting: turned up for the quiet passages, the loud ones startle. Different question from `assert_loudness`, which only asks where the middle sits. |
 | `assert_audio_format` | Mono delivered where stereo was specified, or 44.1 kHz where the spec says 48 — resampled downstream by whichever converter happens to be in the chain. |
+| `assert_lip_sync` | A talking head whose mouth is out of time with its voice. The container is correct, the streams are valid, the durations agree, and `assert_streams_aligned` passes — because that reads the container's timing and this reads the content's. Off by default, and it declines to answer more often than it answers: see the note under *What it does not check*. |
 
 **The blank check is the one that needs no key.** Until it existed, a still had
 to go through the vision tier before this tool would say anything about it at
@@ -413,8 +414,20 @@ renders narrated video at scale:
 | Four episodes rendered *before* that fix | **fails** at −19.4 to −21.3 LUFS |
 
 It drew the line exactly where the fix landed, on files it was never told
-anything about, agreeing with a conclusion humans had reached months earlier —
-and produced no false positives across the clean set.
+anything about, agreeing with a conclusion humans had reached months earlier.
+
+**That table is an anecdote, and it is labelled as one.** The media is private,
+so nobody — including its author — can rerun it. The numbers you *can* check are
+in [docs/calibration.md](docs/calibration.md), produced by `bench/bench.py`:
+
+```bash
+python bench/bench.py sync        # no network, no corpus, about a minute
+```
+
+That script injects defects of known size into media with a known answer and
+counts what each check actually said, with abstentions in the denominator and a
+rule-of-three bound printed next to every zero. Where a threshold in this
+library has a measured provenance, that is where it came from.
 
 ## Two promises
 
@@ -466,12 +479,16 @@ about them.
 Being explicit, because a QA tool that implies more coverage than it has is
 worse than none:
 
-- **Lip sync.** `assert_streams_aligned` reads what the container *declares*
-  about its two streams, and `assert_captions_aligned` matches cue timings
-  against speech. Neither looks at a face. A file where sound and picture are
-  declared identical and the mouth is still a beat behind passes both, and
-  catching that needs a model ([SyncNet](https://github.com/joonson/syncnet_python)
-  and friends) rather than arithmetic.
+- **Lip sync, to the tolerance that matters.** `assert_lip_sync` correlates
+  picture motion against the speech envelope and catches a mouth most of half a
+  second out of time with its voice, with no face detection and no model. Two
+  things it cannot do. It cannot resolve the errors that actually matter
+  perceptually — EBU R37 puts detectability at +40 ms of audio lead and −60 ms
+  of lag, and this catches under a third of 200 ms errors. And it declines to answer on
+  about two files in three, because on those the correlation peak does not stand
+  clear enough to read a number off. It finds a broken pipeline; it does not
+  certify a good one, and that still needs a model
+  ([SyncNet](https://github.com/joonson/syncnet_python) and friends).
 - **Perceptual video quality.** No PSNR, SSIM, or VMAF — those need a reference
   encode to compare against, which generated media does not have.
 - **Whether the narration is *correct*** — only how fast it's read, and whether
